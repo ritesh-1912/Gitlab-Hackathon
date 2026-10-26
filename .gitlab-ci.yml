@@ -41,7 +41,7 @@ include:
   # Official SAST template for static application security testing (VERIFY analyzer compatibility)
   - template: Jobs/SAST.gitlab-ci.yml
   # Official Secret Detection template for credential leaks (outputs gl-secret-detection-report.json)
-  - template: Jobs/Secret-Detection.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
 
 # ------------------------------------------------------------------------------
 # Stage 3: Govern (Accountability Gate)
@@ -54,7 +54,7 @@ accountability-gate:
     - apt-get update -y && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
   needs:
     - job: test
-    # VERIFY: 'secret_detection' is standard job name in Jobs/Secret-Detection.gitlab-ci.yml
+    # VERIFY: 'secret_detection' is standard job name in Security/Secret-Detection.gitlab-ci.yml
     - job: secret_detection
       artifacts: true
       optional: true
