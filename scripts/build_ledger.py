@@ -108,15 +108,25 @@ def get_commit_history(repo_dir: str = ".", max_count: int = 50) -> List[Dict[st
 
 
 def load_gate_report(report_path: str) -> Optional[Dict[str, Any]]:
-    """Loads gate_report.json if present."""
+    """Loads gate_report.json if present. Returns a structured invalid dictionary if malformed."""
     if not os.path.exists(report_path):
         return None
     try:
         with open(report_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        if not isinstance(data, dict) or "gate_status" not in data:
+            return {
+                "gate_status": "INVALID_REPORT",
+                "summary": {"total_violations": 1, "linked_issue": "None"},
+                "violations": ["Invalid gate report structure: missing 'gate_status' field."],
+            }
+        return data
     except Exception as e:
-        print(f"Warning: Failed to parse {report_path}: {e}", file=sys.stderr)
-        return None
+        return {
+            "gate_status": "INVALID_REPORT",
+            "summary": {"total_violations": 1, "linked_issue": "None"},
+            "violations": [f"Malformed gate report JSON: {e}"],
+        }
 
 
 def generate_html(
@@ -136,17 +146,43 @@ def generate_html(
     compliance_rate = (verified_count / total_commits * 100) if total_commits > 0 else 0.0
 
     # Gate info
-    gate_status = "UNKNOWN"
+    gate_status = "NOT AVAILABLE"
     gate_badge_class = "badge-neutral"
     linked_issue = "None"
     violations_count = 0
+    violations: List[str] = []
 
-    if gate_report:
-        gate_status = gate_report.get("gate_status", "UNKNOWN")
-        gate_badge_class = "badge-pass" if gate_status == "PASSED" else "badge-fail"
+    if gate_report is not None:
+        raw_status = gate_report.get("gate_status", "UNKNOWN")
+        if raw_status == "PASSED":
+            gate_status = "PASSED"
+            gate_badge_class = "badge-pass"
+        elif raw_status == "FAILED":
+            gate_status = "FAILED"
+            gate_badge_class = "badge-fail"
+        elif raw_status == "INVALID_REPORT":
+            gate_status = "INVALID REPORT"
+            gate_badge_class = "badge-fail"
+        else:
+            gate_status = str(raw_status)
+            gate_badge_class = "badge-neutral"
+
         summary = gate_report.get("summary", {})
         linked_issue = summary.get("linked_issue") or "None"
-        violations_count = summary.get("total_violations", len(gate_report.get("violations", [])))
+        violations = gate_report.get("violations", [])
+        violations_count = summary.get("total_violations", len(violations))
+
+    violations_html = ""
+    if violations:
+        items = "\n".join(f"<li>{html.escape(str(v))}</li>" for v in violations)
+        violations_html = f"""
+    <div class="violations-card">
+      <div class="violations-title">Reported Gate Violations ({len(violations)})</div>
+      <ul class="violations-list">
+        {items}
+      </ul>
+    </div>
+    """
 
     # Build rows
     rows_html = []
@@ -350,6 +386,27 @@ def generate_html(
     .disclaimer-card strong {{
       color: var(--accent);
     }}
+    .violations-card {{
+      background: rgba(218, 54, 51, 0.1);
+      border: 1px solid rgba(218, 54, 51, 0.4);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+    }}
+    .violations-title {{
+      color: #f85149;
+      font-weight: 700;
+      margin-bottom: 8px;
+      font-size: 15px;
+    }}
+    .violations-list {{
+      margin-left: 20px;
+      color: var(--text);
+      font-size: 13px;
+    }}
+    .violations-list li {{
+      margin-bottom: 4px;
+    }}
     footer {{
       text-align: center;
       color: var(--text-muted);
@@ -401,6 +458,8 @@ def generate_html(
         <div class="stat-sub">Assisted-by: none</div>
       </div>
     </div>
+
+    {violations_html}
 
     <div class="disclaimer-card">
       <strong>Honest Limitation &amp; Governance Contract:</strong> AI origin cannot be reliably detected retrospectively in legacy commits without metadata. This pipeline establishes an immutable provenance contract going forward: every change must carry an <code>Assisted-by:</code> trailer and explicit issue intent linkage (<code>Closes #&lt;id&gt;</code>) enforced at the merge gate.

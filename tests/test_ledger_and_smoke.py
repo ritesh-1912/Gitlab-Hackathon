@@ -81,6 +81,97 @@ def test_build_ledger_with_gate_report(tmp_path: Path):
     assert "0 violation(s)" in content
 
 
+def test_build_ledger_with_failed_gate_report_renders_violations(tmp_path: Path):
+    init_test_git_repo(tmp_path)
+    create_test_commit(tmp_path, "feat: bad commit", "bad.txt")
+
+    gate_report_file = tmp_path / "gate_report.json"
+    gate_data = {
+        "gate_status": "FAILED",
+        "summary": {
+            "linked_issue": "#99",
+            "total_violations": 2,
+        },
+        "violations": [
+            "Commit abc1234 is missing a valid 'Assisted-by:' trailer",
+            "Secret detected: Fake API Key in src/app.py:10",
+        ],
+    }
+    gate_report_file.write_text(json.dumps(gate_data))
+
+    out_dir = tmp_path / "public"
+    index_file = build_ledger(
+        output_dir=str(out_dir),
+        gate_report_path=str(gate_report_file),
+        repo_dir=str(tmp_path),
+    )
+
+    content = index_file.read_text(encoding="utf-8")
+    assert "FAILED" in content
+    assert "Reported Gate Violations (2)" in content
+    assert "Commit abc1234 is missing a valid &#x27;Assisted-by:&#x27; trailer" in content or "Commit abc1234 is missing" in content
+    assert "Secret detected: Fake API Key" in content
+
+
+def test_build_ledger_malformed_gate_report_no_false_pass(tmp_path: Path):
+    init_test_git_repo(tmp_path)
+    create_test_commit(tmp_path, "feat: commit\n\nAssisted-by: none", "a.txt")
+
+    gate_report_file = tmp_path / "gate_report.json"
+    gate_report_file.write_text("{ broken json, not valid")
+
+    out_dir = tmp_path / "public"
+    index_file = build_ledger(
+        output_dir=str(out_dir),
+        gate_report_path=str(gate_report_file),
+        repo_dir=str(tmp_path),
+    )
+
+    content = index_file.read_text(encoding="utf-8")
+    assert "INVALID REPORT" in content
+    assert "PASSED" not in content
+
+
+def test_build_ledger_missing_gate_report_no_false_pass(tmp_path: Path):
+    init_test_git_repo(tmp_path)
+    create_test_commit(tmp_path, "feat: commit\n\nAssisted-by: none", "a.txt")
+
+    missing_report = tmp_path / "missing_gate_report.json"
+    out_dir = tmp_path / "public"
+    index_file = build_ledger(
+        output_dir=str(out_dir),
+        gate_report_path=str(missing_report),
+        repo_dir=str(tmp_path),
+    )
+
+    content = index_file.read_text(encoding="utf-8")
+    assert "NOT AVAILABLE" in content
+    # Should not show a false pass badge
+    assert '<span class="badge badge-pass">PASSED</span>' not in content
+
+
+def test_build_ledger_escapes_xss_content(tmp_path: Path):
+    init_test_git_repo(tmp_path)
+    create_test_commit(
+        tmp_path,
+        "<script>alert('xss')</script>\n\nAssisted-by: <img src=x onerror=alert(1)>",
+        "xss.txt",
+    )
+
+    out_dir = tmp_path / "public"
+    index_file = build_ledger(
+        output_dir=str(out_dir),
+        gate_report_path=str(tmp_path / "none.json"),
+        repo_dir=str(tmp_path),
+    )
+
+    content = index_file.read_text(encoding="utf-8")
+    assert "<script>alert('xss')</script>" not in content
+    assert "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;" in content or "&lt;script&gt;" in content
+    assert "<img src=x" not in content
+    assert "&lt;img src=x" in content
+
+
 def test_build_ledger_empty_repo(tmp_path: Path):
     init_test_git_repo(tmp_path)
     out_dir = tmp_path / "public"
