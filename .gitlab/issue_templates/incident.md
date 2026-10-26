@@ -16,4 +16,4 @@
 
 ## Agent Triage Action
 Mention the Incident Trace flow to trigger automated root-cause trace and remediation:
-> `@incident-trace please investigate root cause and prepare rollback command`
+> `@<incident-flow-handle> please investigate root cause and prepare rollback command`

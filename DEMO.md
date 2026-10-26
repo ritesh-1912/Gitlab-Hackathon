@@ -21,13 +21,13 @@ This document provides a step-by-step runbook for demonstrating the three automa
 
 2. **Register Custom Flows in GitLab**:
    In your GitLab project, open the project's Flows page (under the AI or Automate menu, depending on GitLab version), then New flow:
-   - `flows/tracer-bullet.yml` (mention trigger)
-   - `flows/intent.yml` (registered as `intent-agent`, mention trigger)
-   - `flows/accountability-card.yml` (registered as `accountability-card`, mention trigger)
-   - `flows/incident-trace.yml` (registered as `incident-trace`, mention trigger)
+   - `flows/tracer-bullet.yml` (mention trigger: note handle `@<tracer-bullet-handle>`)
+   - `flows/intent.yml` (mention trigger: note handle `@<intent-flow-handle>`)
+   - `flows/accountability-card.yml` (mention trigger: note handle `@<card-flow-handle>`)
+   - `flows/incident-trace.yml` (mention trigger: note handle `@<incident-flow-handle>`)
 
 3. **Verify Staging Pages Configuration**:
-   In **Deploy > Pages**, ensure Pages access is set to **Everyone** so the static Accountability Ledger can be viewed.
+   In **Deploy > Pages**, ensure Pages access is set to **Everyone** so the static Accountability Ledger can be viewed at `<PAGES_URL>`.
 
 ---
 
@@ -35,9 +35,9 @@ This document provides a step-by-step runbook for demonstrating the three automa
 
 ### 1. Plan Stage: Define Intent
 1. In GitLab, create Issue #1 titled `Add Inventory Summary Endpoint`.
-2. Post a comment mentioning `@intent-agent`:
+2. Post a comment mentioning `@<intent-flow-handle>`:
    ```text
-   @intent-agent please define the acceptance criteria and scope boundaries.
+   @<intent-flow-handle> please define the acceptance criteria and scope boundaries.
    ```
 3. The Intent flow posts structured acceptance criteria, a checklist, and an explicit Out-of-Scope guardrail list.
 
@@ -52,9 +52,9 @@ This document provides a step-by-step runbook for demonstrating the three automa
 3. Observe the pipeline: `test`, `security` (Secret Detection), and `gate` (`accountability-gate`) run.
 
 ### 3. Review Stage: Accountability Card
-1. In the MR comments, mention `@accountability-card`:
+1. In the MR comments, mention `@<card-flow-handle>`:
    ```text
-   @accountability-card please review this MR against issue #1.
+   @<card-flow-handle> please review this MR against issue #1.
    ```
 2. The agent evaluates the provenance trailer (`Assisted-by: gitlab-duo`), intent linkage (`Closes #1`), and diff.
 
@@ -62,9 +62,9 @@ This document provides a step-by-step runbook for demonstrating the three automa
 - `test` and `gate` jobs pass.
 - Accountability Card rates risk as **LOW**, finds zero scope creep, and recommends **APPROVE**.
 - Merge the MR into `main`.
-- The `deploy` stage builds the static ledger via `scripts/build_ledger.py` and publishes to GitLab Pages.
+- The `deploy` stage builds the static ledger via `scripts/build_ledger.py` and publishes to GitLab Pages (`<PAGES_URL>`).
 - The `healthcheck` smoke test verifies the endpoint in-process and passes.
-- Staging environment displays a compliant provenance entry in `public/index.html`.
+- Staging environment displays a compliant provenance entry in `public/index.html` (accessible at `<PAGES_URL>`).
 
 ---
 
@@ -83,15 +83,15 @@ This document provides a step-by-step runbook for demonstrating the three automa
 
 ### 2. Review Stage: Pipeline Gate & Accountability Card
 1. The MR pipeline runs automatically.
-2. In the MR comments, mention `@accountability-card`:
+2. In the MR comments, mention `@<card-flow-handle>`:
    ```text
-   @accountability-card please review this MR.
+   @<card-flow-handle> please review this MR.
    ```
 
 ### 3. Expected result (to be confirmed after the first run)
 - `accountability-gate` fails the CI pipeline due to missing provenance trailers.
 - GitLab Secret Detection flags the dummy AWS credential (`AKIAZ7QX3PLM9RTK2VNB`).
-- Accountability Card highlights scope creep (`unrelated_admin_tool.py`), rates risk as **HIGH**, and explicitly recommends **REJECT**.
+- Accountability Card highlights scope creep (`unrelated_admin_tool.py`), rates risk as **HIGH**, and recommends **REJECT**.
 - Merge is blocked, protecting `main` from unvetted code.
 
 ---
@@ -118,9 +118,9 @@ This document provides a step-by-step runbook for demonstrating the three automa
    - **Linked Issue Number**: Linked issue number
 
 ### 4. Trigger Incident Trace Flow
-1. In the incident issue comments, mention `@incident-trace`:
+1. In the incident issue comments, mention `@<incident-flow-handle>`:
    ```text
-   @incident-trace please investigate root cause and prepare rollback command
+   @<incident-flow-handle> please investigate root cause and prepare rollback command
    ```
 
 ### 5. Expected result (to be confirmed after the first run)

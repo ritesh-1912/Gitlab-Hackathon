@@ -2,7 +2,8 @@
 
 **Event**: GitLab Transcend Hackathon — "Life After Code"  
 **Track**: Path A (Fresh Project) & Supervised Autonomy  
-**Repository**: [<GITLAB_PROJECT_URL>](<GITLAB_PROJECT_URL>)
+**Repository**: [<GITLAB_PROJECT_URL>](<GITLAB_PROJECT_URL>)  
+**Accountability Ledger**: [<PAGES_URL>](<PAGES_URL>)
 
 ---
 
@@ -37,9 +38,9 @@ We built **`<PROJECT_NAME>`** to prove that **"Life After Code"** must be about 
    - Calculates provenance compliance rates, AI vs. human commit ratios, and active gate status.
    - Published statically to GitLab Pages (`staging` environment) with zero external database dependencies.
 4. **Three GitLab Duo Custom Flows**:
-   - **Flow 1 ("Intent Definition")**: Triggered on mention on an issue. Generates acceptance criteria, task checklists, and an explicit **Out-of-Scope** guardrail list to prevent AI scope creep before coding starts.
-   - **Flow 2 ("Accountability Card")**: Triggered on mention on an MR review. Evaluates diffs, trailers, intent match, and scope creep. Emits an advisory review card rating risk as LOW/MEDIUM/HIGH with an explicit recommendation (APPROVE/REJECT).
-   - **Flow 3 ("Incident Trace")**: Triggered on mention on an incident issue after staging smoke test failures. Traces using the incident issue's fields (culprit SHA, MR, linked issue) and available tools, outputting the exact `git revert <sha>` command for instant remediation.
+   - **Flow 1 ("Intent Definition")**: Triggered on mention on an issue (`@<intent-flow-handle>`). Generates acceptance criteria, task checklists, and an explicit **Out-of-Scope** guardrail list to prevent AI scope creep before coding starts.
+   - **Flow 2 ("Accountability Card")**: Triggered on mention on an MR review (`@<card-flow-handle>`). Evaluates diffs, trailers, intent match, and scope creep. Emits an advisory review card rating risk as LOW/MEDIUM/HIGH with an explicit recommendation (APPROVE/REJECT).
+   - **Flow 3 ("Incident Trace")**: Triggered on mention on an incident issue (`@<incident-flow-handle>`) after staging smoke test failures. Traces using the incident issue's fields (culprit SHA, MR, linked issue) and available tools, outputting the exact `git revert <sha>` command for instant remediation.
 
 ---
 
@@ -54,7 +55,7 @@ We designed `<PROJECT_NAME>` from the ground up to utilize the official **GitLab
   - Rather than inventing unconfirmed tools, our flows operate on confirmed platform tools (`get_issue`, `get_repository_file`, `list_repository_tree`, `create_issue_note`).
   - For MR reviews, our Accountability Card parses the linked issue from the mention context, audits repository files and gate artifacts, and posts structured notes without relying on unconfirmed diff APIs.
 - **Mention Triggers & Dual-Format Parsing**:
-  - Configured `@mention` triggers on Issues and Merge Requests.
+  - Configured `@mention` triggers on Issues and Merge Requests (`@<intent-flow-handle>`, `@<card-flow-handle>`, `@<incident-flow-handle>`).
   - Prompts parse both integer IIDs (`Context: {Issue IID: 1}`) and typed URLs (`MergeRequest: https://.../10`).
 - **Supervised Autonomy by Design**:
   - The flows do not autonomously push code or create unauthorized MRs. Every output ends with the explicit mandate: **"Advisory only: a human decides."**

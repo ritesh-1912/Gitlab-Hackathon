@@ -35,7 +35,7 @@ When an incident occurs in production, most teams cannot answer:
 ```mermaid
 flowchart TD
     subgraph Plan["1. Plan & Scope"]
-        Issue["GitLab Issue #N"] -->|"@intent-agent mention"| Flow1["Flow 1: Intent Definition<br/>(Acceptance criteria & out-of-scope)"]
+        Issue["GitLab Issue #N"] -->|"@<intent-flow-handle> mention"| Flow1["Flow 1: Intent Definition<br/>(Acceptance criteria & out-of-scope)"]
     end
 
     subgraph CreateVerify["2. Create, Verify & Secure"]
@@ -44,18 +44,18 @@ flowchart TD
         CI -->|"Pytest"| TestJob["test (Unit Tests)"]
         CI -->|"SAST & Secret Detection"| SecJob["security (gl-secret-detection-report.json)"]
         SecJob --> GateJob["accountability-gate<br/>(Validates trailers, intent, secrets)"]
-        MR -->|"@accountability-card mention"| Flow2["Flow 2: Accountability Card<br/>(Risk, intent match, scope creep)"]
+        MR -->|"@<card-flow-handle> mention"| Flow2["Flow 2: Accountability Card<br/>(Risk, intent match, scope creep)"]
     end
 
     subgraph ReleaseGovern["3. Release & Govern"]
         GateJob -->|"Merge to main"| DeployJob["pages (Deploy to Staging)"]
-        DeployJob --> Ledger["Accountability Ledger<br/>(GitLab Pages static site)"]
+        DeployJob --> Ledger["Accountability Ledger<br/>(GitLab Pages static site: &lt;PAGES_URL&gt;)"]
     end
 
     subgraph MonitorRemediate["4. Monitor & Remediate"]
         DeployJob --> SmokeJob["staging-healthcheck<br/>(In-process smoke test)"]
         SmokeJob -->|"Failure reported"| IncIssue["Incident issue opened by a human from the template"]
-        IncIssue -->|"@incident-trace mention"| Flow3["Flow 3: Incident Trace<br/>(Traces culprit SHA, MR, and outputs git revert)"]
+        IncIssue -->|"@<incident-flow-handle> mention"| Flow3["Flow 3: Incident Trace<br/>(Traces culprit SHA, MR, and outputs git revert)"]
     end
 ```
 
@@ -67,8 +67,8 @@ flowchart TD
 | **Create** | Provenance Trailers & Intent Links | Enforces `Assisted-by: <tool|none>` commit trailers and `Closes #N` MR intent links. |
 | **Verify** | Pytest Suite & Flow 2 Card | Unit tests + Duo Review Card evaluating intent match and scope creep. |
 | **Secure** | GitLab SAST & Secret Detection | Scans merge requests; Gate parses report and halts on exposed credentials. |
-| **Release** | GitLab Pages Deployment | Pipeline registers `staging` environment and publishes the latest build. |
-| **Govern** | Accountability Gate & Ledger | Automated merge gate + static HTML Accountability Ledger published to Pages. |
+| **Release** | GitLab Pages Deployment | Pipeline registers `staging` environment and publishes the build to GitLab Pages (`<PAGES_URL>`). |
+| **Govern** | Accountability Gate & Ledger | Automated merge gate + static HTML Accountability Ledger published to Pages (`<PAGES_URL>`). |
 | **Monitor** | In-Process Staging Healthcheck | Smoke test verifying `/health` and service endpoints post-deployment. |
 | **Remediate** | Flow 3: Incident Trace | Traces failed releases using incident issue fields (culprit SHA, MR, linked issue) and outputs exact `git revert` commands. |
 
@@ -155,14 +155,14 @@ python3 scripts/smoke_test.py --fail-on-purpose
 2. Navigate to **Settings > Merge requests**:
    - Set **Merge method** to **Merge commit** (preserves individual commit history and `Assisted-by:` trailers in `main`).
 3. Navigate to **Deploy > Pages**:
-   - Ensure Pages access is set to **Everyone** so the public Accountability Ledger is accessible.
+   - Ensure Pages access is set to **Everyone** so the public Accountability Ledger is accessible at `<PAGES_URL>`.
 
 ### 2. Register GitLab Duo Custom Flows
 In GitLab, open the project's Flows page (under the AI or Automate menu, depending on GitLab version), then New flow:
-1. **Tracer Bullet** (`flows/tracer-bullet.yml`): Register and add **Mention** trigger.
-2. **Intent Flow** (`flows/intent.yml`): Register as `intent-agent` and add **Mention** trigger.
-3. **Accountability Card** (`flows/accountability-card.yml`): Register as `accountability-card` and add **Mention** trigger.
-4. **Incident Trace** (`flows/incident-trace.yml`): Register as `incident-trace` and add **Mention** trigger.
+1. **Tracer Bullet** (`flows/tracer-bullet.yml`): Register and add **Mention** trigger. Note configured mention handle (e.g. `@<tracer-bullet-handle>`).
+2. **Intent Flow** (`flows/intent.yml`): Register and add **Mention** trigger. Note configured mention handle (`@<intent-flow-handle>`).
+3. **Accountability Card** (`flows/accountability-card.yml`): Register and add **Mention** trigger. Note configured mention handle (`@<card-flow-handle>`).
+4. **Incident Trace** (`flows/incident-trace.yml`): Register and add **Mention** trigger. Note configured mention handle (`@<incident-flow-handle>`).
 
 ---
 
@@ -176,8 +176,8 @@ Demo branches are pushed to GitLab only. Run the seeding script to prepare the t
 ### Scenario A: Clean Feature MR (Passes & Deploys)
 1. Push branch: `git push -u gitlab demo/scenario-a-clean`.
 2. Open MR with description: `Implements inventory summary endpoint. Closes #1`.
-3. Mention `@accountability-card` in the MR comment.
-4. **Expected result (to be confirmed after the first run)**: All tests pass, Accountability Gate passes, Review Card recommends `APPROVE`. Merging deploys to staging and appends a verified entry to the Pages Accountability Ledger.
+3. Mention `@<card-flow-handle>` in the MR comment.
+4. **Expected result (to be confirmed after the first run)**: All tests pass, Accountability Gate passes, Review Card recommends `APPROVE`. Merging deploys to staging and appends a verified entry to the Pages Accountability Ledger (`<PAGES_URL>`).
 
 ### Scenario B: Unvetted AI Code (Gate & Secret Catch)
 1. Push branch: `git push -u gitlab demo/scenario-b-bad-gate`.
@@ -191,7 +191,7 @@ Demo branches are pushed to GitLab only. Run the seeding script to prepare the t
 1. Push branch: `git push -u gitlab demo/scenario-c-bad-healthcheck` and merge to `main`.
 2. Staging deploy runs, but `staging-healthcheck` fails on `GET /health` (`HTTP 500`).
 3. Incident issue opened by a human from the template (`.gitlab/issue_templates/incident.md`).
-4. Mention `@incident-trace`: Flow 3 traces using the incident issue's fields (culprit SHA, MR, linked issue) and available tools, and outputs:
+4. Mention `@<incident-flow-handle>`: Flow 3 traces using the incident issue's fields (culprit SHA, MR, linked issue) and available tools, and outputs:
    ```bash
    git revert <culprit_sha> --no-edit && git push gitlab main
    ```
