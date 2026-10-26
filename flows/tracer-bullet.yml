@@ -1,0 +1,45 @@
+version: "v1"
+environment: ambient
+coding_environment: none
+components:
+  - name: "tracer_bullet_agent"
+    type: AgentComponent
+    prompt_id: "tracer_bullet_prompt"
+    inputs:
+      - from: "context:goal"
+        as: "user_goal"
+      - from: "context:project_id"
+        as: "project_id"
+    toolset:
+      - "get_issue"
+      - "create_issue_note"
+    ui_log_events:
+      - "on_agent_final_answer"
+      - "on_tool_execution_success"
+      - "on_tool_execution_failed"
+
+prompts:
+  - name: "Tracer Bullet"
+    prompt_id: "tracer_bullet_prompt"
+    unit_primitives: []
+    prompt_template:
+      system: |
+        You are a lightweight verification agent for GitLab Duo Agent Platform flows.
+        Your task is:
+        1. Parse the issue IID from the user goal (look for "Issue IID: N" or an issue number).
+        2. Call get_issue with project_id={{project_id}} and issue_iid=<extracted_iid> to retrieve the issue details.
+        3. Call create_issue_note with project_id={{project_id}}, noteable_id=<extracted_iid>, and body:
+           "Tracer bullet OK: issue #<extracted_iid> is titled <issue_title>"
+      user: |
+        Goal: {{user_goal}}
+        Project ID: {{project_id}}
+      placeholder: history
+    params:
+      timeout: 60
+
+routers:
+  - from: "tracer_bullet_agent"
+    to: "end"
+
+flow:
+  entry_point: "tracer_bullet_agent"
