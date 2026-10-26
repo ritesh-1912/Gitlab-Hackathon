@@ -1,0 +1,113 @@
+# ==============================================================================
+# GitLab CI/CD Pipeline: AI Accountability Pipeline (<PROJECT_NAME>)
+# DevSecOps Lifecycle Stages: test -> security -> gate -> deploy -> healthcheck
+# ==============================================================================
+
+# Prevent duplicate pipelines: run on MR events and pushes to default branch only
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+variables:
+  # Full clone depth required for accurate git rev-list base..head diffing
+  GIT_DEPTH: "0"
+  # Security analyzer configuration
+  SECURE_LOG_LEVEL: "info"
+  SECRET_DETECTION_HISTORIC_SCAN: "false"
+
+stages:
+  - test
+  - security
+  - gate
+  - deploy
+  - healthcheck
+
+# ------------------------------------------------------------------------------
+# Stage 1: Verify (Unit Tests)
+# ------------------------------------------------------------------------------
+test:
+  stage: test
+  image: python:3.12-slim
+  before_script:
+    - pip install --no-cache-dir -r src/requirements.txt
+  script:
+    - python -m pytest -v
+
+# ------------------------------------------------------------------------------
+# Stage 2: Secure (Official GitLab Security Templates)
+# ------------------------------------------------------------------------------
+include:
+  # Official SAST template for static application security testing (VERIFY analyzer compatibility)
+  - template: Jobs/SAST.gitlab-ci.yml
+  # Official Secret Detection template for credential leaks (outputs gl-secret-detection-report.json)
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+# ------------------------------------------------------------------------------
+# Stage 3: Govern (Accountability Gate)
+# ------------------------------------------------------------------------------
+accountability-gate:
+  stage: gate
+  image: python:3.12-slim
+  before_script:
+    # Ensure git is available in slim container for rev-list / trailer inspection
+    - apt-get update -y && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+  needs:
+    - job: test
+    # VERIFY: 'secret_detection' is standard job name in Jobs/Secret-Detection.gitlab-ci.yml
+    - job: secret_detection
+      artifacts: true
+      optional: true
+  script:
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        echo "Running gate in MERGE REQUEST mode..."
+        python3 scripts/accountability_gate.py --mode mr
+      else
+        echo "Running gate in PUSH mode (default branch)..."
+        python3 scripts/accountability_gate.py --mode push
+      fi
+  artifacts:
+    when: always
+    paths:
+      - gate_report.json
+    expire_in: 30 days
+
+# ------------------------------------------------------------------------------
+# Stage 4: Release & Govern (Deploy Static Accountability Ledger via Pages)
+# ------------------------------------------------------------------------------
+pages:
+  stage: deploy
+  image: python:3.12-slim
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  environment:
+    name: staging
+    url: $CI_PAGES_URL # VERIFY: $CI_PAGES_URL provides the active GitLab Pages staging endpoint
+  before_script:
+    - apt-get update -y && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+  script:
+    # Generates public/index.html containing the immutable provenance ledger
+    - python3 scripts/build_ledger.py --output-dir public --environment staging
+  artifacts:
+    paths:
+      - public # VERIFY: GitLab Pages requires files to reside in 'public/' artifact directory
+    expire_in: 30 days
+
+# ------------------------------------------------------------------------------
+# Stage 5: Monitor (In-Process Staging Smoke Test)
+# ------------------------------------------------------------------------------
+staging-healthcheck:
+  stage: healthcheck
+  image: python:3.12-slim
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  needs:
+    - job: pages
+  before_script:
+    - pip install --no-cache-dir -r src/requirements.txt
+  script:
+    # In-process smoke test simulating staging verification before promotion
+    - python3 scripts/smoke_test.py
+  environment:
+    name: staging

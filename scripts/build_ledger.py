@@ -168,7 +168,11 @@ def generate_html(
             gate_badge_class = "badge-neutral"
 
         summary = gate_report.get("summary", {})
-        linked_issue = summary.get("linked_issue") or "None"
+        intent = gate_report.get("intent_check", {})
+        if intent.get("status") == "NOT_APPLICABLE":
+            linked_issue = "N/A (Push Mode)"
+        else:
+            linked_issue = summary.get("linked_issue") or "None"
         violations = gate_report.get("violations", [])
         violations_count = summary.get("total_violations", len(violations))
 

@@ -376,3 +376,127 @@ def test_cli_execution_failure_missing_trailer(tmp_path: Path):
         data = json.load(f)
     assert data["gate_status"] == "FAILED"
     assert len(data["violations"]) >= 1
+
+
+def test_provenance_excludes_merge_commits(tmp_path: Path):
+    init_git_repo(tmp_path)
+    base_sha = create_commit(tmp_path, "Base commit\n\nAssisted-by: none", "init.txt", "base\n")
+
+    # Feature branch commit
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=str(tmp_path), check=True, capture_output=True)
+    create_commit(tmp_path, "Feature commit\n\nAssisted-by: gitlab-duo", "feat.txt", "feat\n")
+
+    # Switch back to main and add another commit
+    subprocess.run(["git", "checkout", "main"], cwd=str(tmp_path), check=True, capture_output=True)
+    create_commit(tmp_path, "Main commit\n\nAssisted-by: none", "main.txt", "main\n")
+
+    # Merge feature branch creating a merge commit without trailer
+    subprocess.run(
+        ["git", "merge", "--no-ff", "feature", "-m", "Merge branch feature into main"],
+        cwd=str(tmp_path),
+        check=True,
+        capture_output=True,
+    )
+
+    res, violations = check_provenance(base=base_sha, head="HEAD", repo_dir=str(tmp_path), no_merges=True)
+    assert res["status"] == "PASSED"
+    assert res["skipped_merges_count"] == 1
+    assert res["total_commits"] == 2  # Feature commit + main commit (merge commit excluded)
+    assert res["valid_trailers_count"] == 2
+    assert len(violations) == 0
+
+
+def test_push_mode_normal_range(tmp_path: Path):
+    init_git_repo(tmp_path)
+    base_sha = create_commit(tmp_path, "Base commit\n\nAssisted-by: none", "init.txt", "base\n")
+    head_sha = create_commit(tmp_path, "Direct push commit\n\nAssisted-by: gitlab-duo", "feat.txt", "feat\n")
+
+    report_path = tmp_path / "gate_report.json"
+    exit_code, report = run_gate(
+        base=base_sha,
+        head=head_sha,
+        description=None,  # No MR description in push mode
+        mode="push",
+        secret_report=str(tmp_path / "gl-secret-detection-report.json"),
+        output_path=str(report_path),
+        repo_dir=str(tmp_path),
+    )
+
+    assert exit_code == 0
+    assert report["gate_status"] == "PASSED"
+    assert report["intent_check"]["status"] == "NOT_APPLICABLE"
+    assert report["summary"]["mode"] == "push"
+    assert len(report["violations"]) == 0
+
+
+def test_push_mode_all_zeros_base_checks_only_head(tmp_path: Path):
+    init_git_repo(tmp_path)
+    create_commit(tmp_path, "Older commit\n\nAssisted-by: none", "init.txt", "base\n")
+    head_sha = create_commit(tmp_path, "Head commit\n\nAssisted-by: gitlab-duo", "feat.txt", "feat\n")
+
+    report_path = tmp_path / "gate_report.json"
+    exit_code, report = run_gate(
+        base="0000000000000000000000000000000000000000",
+        head=head_sha,
+        description=None,
+        mode="push",
+        secret_report=str(tmp_path / "gl-secret-detection-report.json"),
+        output_path=str(report_path),
+        repo_dir=str(tmp_path),
+    )
+
+    assert exit_code == 0
+    assert report["gate_status"] == "PASSED"
+    assert report["provenance_check"]["check_only_head"] is True
+    assert report["provenance_check"]["total_commits"] == 1
+    assert report["intent_check"]["status"] == "NOT_APPLICABLE"
+
+
+def test_push_mode_all_zeros_base_fails_if_head_missing_trailer(tmp_path: Path):
+    init_git_repo(tmp_path)
+    create_commit(tmp_path, "Older commit\n\nAssisted-by: none", "init.txt", "base\n")
+    head_sha = create_commit(tmp_path, "Head commit without trailer", "feat.txt", "feat\n")
+
+    report_path = tmp_path / "gate_report.json"
+    exit_code, report = run_gate(
+        base="0000000000000000000000000000000000000000",
+        head=head_sha,
+        description=None,
+        mode="push",
+        secret_report=str(tmp_path / "gl-secret-detection-report.json"),
+        output_path=str(report_path),
+        repo_dir=str(tmp_path),
+    )
+
+    assert exit_code == 1
+    assert report["gate_status"] == "FAILED"
+    assert any("missing a valid 'Assisted-by:' trailer" in v for v in report["violations"])
+
+
+def test_cli_execution_push_mode(tmp_path: Path):
+    init_git_repo(tmp_path)
+    head_sha = create_commit(tmp_path, "Push commit\n\nAssisted-by: none", "file.txt", "content\n")
+
+    report_path = tmp_path / "gate_report.json"
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "accountability_gate.py"
+
+    cmd = [
+        sys.executable,
+        str(script_path),
+        "--mode",
+        "push",
+        "--base",
+        "0000000000000000000000000000000000000000",
+        "--head",
+        head_sha,
+        "--output",
+        str(report_path),
+        "--repo-dir",
+        str(tmp_path),
+    ]
+
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    assert res.returncode == 0
+    assert "ACCOUNTABILITY GATE: PASSED" in res.stdout
+    assert "Mode: PUSH" in res.stdout
+    assert "Intent Check: NOT_APPLICABLE" in res.stdout

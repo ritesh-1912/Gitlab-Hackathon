@@ -3,8 +3,12 @@
 Accountability Gate for DevSecOps pipelines.
 
 Validates:
-1. Commit Provenance: Every commit in the MR contains a valid 'Assisted-by:' Git trailer.
-2. Intent Linkage: MR description explicitly references an issue ('Closes #<id>' or 'Fixes #<id>').
+1. Commit Provenance: Every non-merge commit introduced in the MR or push carries
+   a valid 'Assisted-by:' Git trailer ('Assisted-by: <tool|agent>' or 'Assisted-by: none').
+   Merge commits are explicitly excluded from inspection and counted as skipped.
+2. Intent Linkage:
+   - In MR mode: MR description must reference an issue ('Closes #<id>' or 'Fixes #<id>').
+   - In push mode (default branch): returns NOT_APPLICABLE (checked at MR time).
 3. Secret Detection: Parses gl-secret-detection-report.json if present; fails on any findings.
 
 Generates a structured gate_report.json artifact and exits 0 on pass, non-zero on failure.
@@ -18,6 +22,14 @@ import re
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def is_all_zeros(val: Optional[str]) -> bool:
+    """Returns True if the string is non-empty and consists entirely of zeros."""
+    if not val:
+        return False
+    clean = val.strip()
+    return bool(clean and re.match(r"^0+$", clean))
 
 
 def parse_trailer_from_text(msg: str, key: str = "Assisted-by") -> Optional[str]:
@@ -98,31 +110,88 @@ def get_commit_subject(sha: str, repo_dir: str = ".") -> str:
     return "Unknown subject"
 
 
-def get_commits_in_range(base: str, head: str, repo_dir: str = ".") -> Tuple[List[str], Optional[str]]:
+def get_commits_in_range(
+    base: Optional[str],
+    head: str,
+    repo_dir: str = ".",
+    no_merges: bool = True,
+    check_only_head: bool = False,
+) -> Tuple[List[str], int, Optional[str]]:
     """
-    Returns list of commit SHAs between base and head (base..head).
-    Returns (shas, error_message).
+    Returns (non_merge_shas, skipped_merges_count, error_message).
+    When check_only_head is True, inspects only the head commit.
     """
-    cmd = ["git", "rev-list", f"{base}..{head}"]
+    if check_only_head:
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", head], cwd=repo_dir, capture_output=True, text=True, check=False
+            )
+            if res.returncode != 0:
+                return [], 0, f"Git rev-parse failed for '{head}': {res.stderr.strip()}"
+            head_sha = res.stdout.strip()
+
+            # Check if head is a merge commit (has more than 1 parent)
+            p_res = subprocess.run(
+                ["git", "rev-list", "--parents", "-n", "1", head_sha],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if p_res.returncode == 0:
+                parts = p_res.stdout.strip().split()
+                if len(parts) > 2 and no_merges:
+                    # Head is a merge commit and merge commits are excluded
+                    return [], 1, None
+            return [head_sha], 0, None
+        except Exception as e:
+            return [], 0, f"Exception checking head commit: {e}"
+
+    cmd = ["git", "rev-list"]
+    if no_merges:
+        cmd.append("--no-merges")
+    cmd.append(f"{base}..{head}")
+
     try:
         res = subprocess.run(cmd, cwd=repo_dir, capture_output=True, text=True, check=False)
         if res.returncode != 0:
             err = res.stderr.strip() or f"git rev-list exited with code {res.returncode}"
-            return [], f"Git command failed ('{' '.join(cmd)}'): {err}"
+            return [], 0, f"Git command failed ('{' '.join(cmd)}'): {err}"
 
         shas = [line.strip() for line in res.stdout.splitlines() if line.strip()]
-        return shas, None
+
+        # Count skipped merge commits in the range
+        skipped_merges = 0
+        if no_merges:
+            merges_res = subprocess.run(
+                ["git", "rev-list", "--merges", f"{base}..{head}"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if merges_res.returncode == 0:
+                skipped_merges = len([line for line in merges_res.stdout.splitlines() if line.strip()])
+
+        return shas, skipped_merges, None
     except Exception as e:
-        return [], f"Exception executing git rev-list: {e}"
+        return [], 0, f"Exception executing git rev-list: {e}"
 
 
 def check_provenance(
-    base: Optional[str], head: str, repo_dir: str = "."
+    base: Optional[str],
+    head: str,
+    repo_dir: str = ".",
+    no_merges: bool = True,
+    check_only_head: bool = False,
 ) -> Tuple[Dict[str, Any], List[str]]:
-    """Validates that all commits in range base..head carry a valid Assisted-by trailer."""
+    """
+    Validates that all non-merge commits in range base..head (or head only) carry a valid Assisted-by trailer.
+    Merge commits are excluded and reported.
+    """
     violations: List[str] = []
 
-    if not base:
+    if not check_only_head and not base:
         violations.append(
             "Cannot determine base commit for merge request. "
             "In CI, ensure CI_MERGE_REQUEST_DIFF_BASE_SHA is set, or provide --base locally."
@@ -131,32 +200,53 @@ def check_provenance(
             "status": "FAILED",
             "base_sha": None,
             "head_sha": head,
+            "check_only_head": False,
             "commits": [],
             "total_commits": 0,
             "valid_trailers_count": 0,
+            "skipped_merges_count": 0,
         }, violations
 
-    shas, err = get_commits_in_range(base, head, repo_dir)
+    shas, skipped_merges, err = get_commits_in_range(
+        base, head, repo_dir=repo_dir, no_merges=no_merges, check_only_head=check_only_head
+    )
     if err:
         violations.append(err)
         return {
             "status": "FAILED",
             "base_sha": base,
             "head_sha": head,
+            "check_only_head": check_only_head,
             "commits": [],
             "total_commits": 0,
             "valid_trailers_count": 0,
+            "skipped_merges_count": skipped_merges,
         }, violations
 
     if not shas:
+        if skipped_merges > 0:
+            # All commits in range were merge commits; since merges are excluded, this is clean.
+            return {
+                "status": "PASSED",
+                "base_sha": base,
+                "head_sha": head,
+                "check_only_head": check_only_head,
+                "commits": [],
+                "total_commits": 0,
+                "valid_trailers_count": 0,
+                "skipped_merges_count": skipped_merges,
+            }, violations
+
         violations.append(f"Commit range '{base}..{head}' contains no commits to inspect.")
         return {
             "status": "FAILED",
             "base_sha": base,
             "head_sha": head,
+            "check_only_head": check_only_head,
             "commits": [],
             "total_commits": 0,
             "valid_trailers_count": 0,
+            "skipped_merges_count": 0,
         }, violations
 
     inspected_commits = []
@@ -188,14 +278,29 @@ def check_provenance(
         "status": status,
         "base_sha": base,
         "head_sha": head,
+        "check_only_head": check_only_head,
         "commits": inspected_commits,
         "total_commits": len(shas),
         "valid_trailers_count": valid_count,
+        "skipped_merges_count": skipped_merges,
     }, violations
 
 
-def check_intent(description: Optional[str]) -> Tuple[Dict[str, Any], List[str]]:
-    """Validates that MR description references an issue via Closes #<id> or Fixes #<id>."""
+def check_intent(description: Optional[str], mode: str = "mr") -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Validates intent linkage.
+    In 'push' mode: returns NOT_APPLICABLE (intent is enforced at merge request time).
+    In 'mr' mode: requires valid Closes #<id> or Fixes #<id> in description.
+    """
+    if mode == "push":
+        return {
+            "status": "NOT_APPLICABLE",
+            "linked_issue": None,
+            "issue_iid": None,
+            "keyword": None,
+            "reason": "Intent linkage verified at merge request time (push mode on default branch).",
+        }, []
+
     violations: List[str] = []
 
     if description is None:
@@ -323,25 +428,62 @@ def check_secrets(
     }, violations
 
 
-def resolve_base_ref(cli_base: Optional[str]) -> Tuple[Optional[str], str]:
-    """Resolves base ref from CLI or CI environment variables."""
-    if cli_base:
-        return cli_base, "cli_argument"
+def resolve_mode(cli_mode: str) -> str:
+    """Resolves operational mode ('mr' or 'push')."""
+    if cli_mode in ("mr", "push"):
+        return cli_mode
 
-    # GitLab MR pipeline variables
+    # Auto-detection from GitLab CI environment variables
+    source = os.environ.get("CI_PIPELINE_SOURCE")
+    if source == "merge_request_event" or os.environ.get("CI_MERGE_REQUEST_IID"):
+        return "mr"
+
+    default_branch = os.environ.get("CI_DEFAULT_BRANCH", "main")
+    if os.environ.get("CI_COMMIT_BRANCH") == default_branch:
+        return "push"
+
+    if os.environ.get("CI_COMMIT_BEFORE_SHA"):
+        return "push"
+
+    if os.environ.get("CI_MERGE_REQUEST_DESCRIPTION"):
+        return "mr"
+
+    return "mr"
+
+
+def resolve_base_ref(cli_base: Optional[str], mode: str) -> Tuple[Optional[str], str, bool]:
+    """
+    Resolves base ref from CLI or CI environment variables.
+    Returns (base_ref, source_label, check_only_head).
+    """
+    if mode == "push":
+        if cli_base is not None:
+            if not cli_base.strip() or is_all_zeros(cli_base):
+                return None, "cli_base_zeros_or_empty", True
+            return cli_base, "cli_argument", False
+
+        before_sha = os.environ.get("CI_COMMIT_BEFORE_SHA")
+        if not before_sha or not before_sha.strip() or is_all_zeros(before_sha):
+            return None, "CI_COMMIT_BEFORE_SHA_zeros_or_empty", True
+        return before_sha, "CI_COMMIT_BEFORE_SHA", False
+
+    # MR mode
+    if cli_base:
+        return cli_base, "cli_argument", False
+
     diff_base = os.environ.get("CI_MERGE_REQUEST_DIFF_BASE_SHA")
     if diff_base:
-        return diff_base, "CI_MERGE_REQUEST_DIFF_BASE_SHA"
+        return diff_base, "CI_MERGE_REQUEST_DIFF_BASE_SHA", False
 
     target_sha = os.environ.get("CI_MERGE_REQUEST_TARGET_BRANCH_SHA")
     if target_sha:
-        return target_sha, "CI_MERGE_REQUEST_TARGET_BRANCH_SHA"
+        return target_sha, "CI_MERGE_REQUEST_TARGET_BRANCH_SHA", False
 
     target_branch = os.environ.get("CI_MERGE_REQUEST_TARGET_BRANCH_NAME")
     if target_branch:
-        return f"origin/{target_branch}", "CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+        return f"origin/{target_branch}", "CI_MERGE_REQUEST_TARGET_BRANCH_NAME", False
 
-    return None, "unavailable"
+    return None, "unavailable", False
 
 
 def resolve_head_ref(cli_head: Optional[str]) -> Tuple[str, str]:
@@ -371,24 +513,32 @@ def run_gate(
     base: Optional[str] = None,
     head: Optional[str] = None,
     description: Optional[str] = None,
+    mode: str = "auto",
     secret_report: str = "gl-secret-detection-report.json",
     require_secret_report: bool = False,
     output_path: str = "gate_report.json",
     repo_dir: str = ".",
 ) -> Tuple[int, Dict[str, Any]]:
     """Runs all gate checks and writes output report."""
-    resolved_base, base_source = resolve_base_ref(base)
+    resolved_mode = resolve_mode(mode)
+    resolved_base, base_source, check_only_head = resolve_base_ref(base, resolved_mode)
     resolved_head, head_source = resolve_head_ref(head)
     resolved_desc, desc_source = resolve_description(description)
 
     all_violations: List[str] = []
 
-    # 1. Provenance Check
-    prov_res, prov_violations = check_provenance(resolved_base, resolved_head, repo_dir)
+    # 1. Provenance Check (excludes merge commits)
+    prov_res, prov_violations = check_provenance(
+        resolved_base,
+        resolved_head,
+        repo_dir=repo_dir,
+        no_merges=True,
+        check_only_head=check_only_head,
+    )
     all_violations.extend(prov_violations)
 
-    # 2. Intent Check
-    intent_res, intent_violations = check_intent(resolved_desc)
+    # 2. Intent Check (NOT_APPLICABLE in push mode)
+    intent_res, intent_violations = check_intent(resolved_desc, mode=resolved_mode)
     all_violations.extend(intent_violations)
 
     # 3. Secret Detection Check
@@ -401,14 +551,19 @@ def run_gate(
     report_data = {
         "gate_status": gate_status,
         "summary": {
+            "mode": resolved_mode,
             "commits_inspected": prov_res.get("total_commits", 0),
+            "skipped_merges": prov_res.get("skipped_merges_count", 0),
             "valid_trailers": prov_res.get("valid_trailers_count", 0),
             "linked_issue": intent_res.get("linked_issue"),
+            "intent_status": intent_res.get("status"),
             "secret_detection_status": secret_res.get("status"),
             "secret_findings_count": secret_res.get("findings_count", 0),
             "total_violations": len(all_violations),
         },
         "metadata": {
+            "mode": resolved_mode,
+            "check_only_head": check_only_head,
             "base_ref": resolved_base,
             "base_source": base_source,
             "head_ref": resolved_head,
@@ -441,19 +596,27 @@ def print_summary(report: Dict[str, Any]) -> None:
 
     print("\n" + "=" * 60)
     print(f"               ACCOUNTABILITY GATE: {status}")
+    print(f"               Mode: {summary.get('mode', 'N/A').upper()}")
     print("=" * 60)
     print(f"1. Provenance Check: {prov.get('status', 'N/A')}")
     print(f"   - Commits Inspected: {summary.get('commits_inspected', 0)}")
     print(f"   - Valid Trailers:    {summary.get('valid_trailers', 0)}")
+    if summary.get("skipped_merges", 0) > 0:
+        print(f"   - Skipped Merges:    {summary.get('skipped_merges')} (excluded from check)")
+
     for c in prov.get("commits", []):
         tag = "VALID" if c.get("valid_trailer") else "INVALID"
         trailer = c.get("assisted_by") or "MISSING"
         print(f"     [{c.get('short_sha')}] {c.get('subject')} (Trailer: {trailer}) -> {tag}")
 
-    print(f"\n2. Intent Check: {intent.get('status', 'N/A')}")
-    print(f"   - Linked Issue: {intent.get('linked_issue') or 'None'}")
-    if intent.get("keyword"):
-        print(f"   - Keyword:      {intent.get('keyword')}")
+    intent_status = intent.get("status", "N/A")
+    if intent_status == "NOT_APPLICABLE":
+        print("\n2. Intent Check: NOT_APPLICABLE (Verified at MR time on default branch push)")
+    else:
+        print(f"\n2. Intent Check: {intent_status}")
+        print(f"   - Linked Issue: {intent.get('linked_issue') or 'None'}")
+        if intent.get("keyword"):
+            print(f"   - Keyword:      {intent.get('keyword')}")
 
     print(f"\n3. Secret Detection: {secrets.get('status', 'N/A')}")
     print(f"   - Report:   {secrets.get('report_path')}")
@@ -471,7 +634,13 @@ def print_summary(report: Dict[str, Any]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Accountability Gate for GitLab DevSecOps pipelines")
-    parser.add_argument("--base", help="Base commit SHA or ref for merge request comparison")
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "mr", "push"],
+        default="auto",
+        help="Pipeline mode: 'mr' enforces intent and MR base diff; 'push' checks push range/HEAD and marks intent NOT_APPLICABLE",
+    )
+    parser.add_argument("--base", help="Base commit SHA or ref for comparison")
     parser.add_argument("--head", default=None, help="Head commit SHA or ref (default: HEAD / CI_COMMIT_SHA)")
     parser.add_argument("--description", help="Merge request description content")
     parser.add_argument(
@@ -497,6 +666,7 @@ def main() -> None:
         base=args.base,
         head=args.head,
         description=args.description,
+        mode=args.mode,
         secret_report=args.secret_report,
         require_secret_report=args.require_secret_report,
         output_path=args.output,
