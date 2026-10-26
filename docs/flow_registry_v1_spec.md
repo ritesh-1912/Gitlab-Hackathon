@@ -1,0 +1,1923 @@
+# Flow Registry Framework v1 version documentation
+
+This page documents capabilities of _v1_ version of Flow Registry.
+This version is the current stable version that should be used to develop
+with Duo Agent Platform
+
+[[_TOC_]]
+
+## YAML Configuration Structure
+
+YAML configuration files define the structure and behavior of your flows.
+Every flow YAML file must contain these top-level sections that specify components, routing logic, and execution
+parameters.
+
+```yaml
+version: "v1"
+environment: ambient
+
+components:
+# List of components (see Component Types section)
+
+routers:
+# Define flow between components (see examples below)
+
+flow:
+    entry_point: "component_name"  # Name of first component to run
+```
+
+### Required Fields
+
+- **version**: Always use `"v1"` for the current framework version
+- **environment**: Indicate how AI feature implemented by given flow config will operate within Duo Agent Platform, refer to [environment](#environment) section for more details
+- **components**: List of components that make up your flow, for more details see the main documentation [page](index.md#key-framework-concepts)
+- **routers**: Define how components connect to each other, for more details see the main documentation [page](index.md#routers)
+- **flow**: Specify the entry point component and other options, for more details see the main documentation [page](index.md#yaml-configuration-structure)
+- **prompts**: List of inline prompt templates for flow components to use, for more details see this [paragraph](#prompts)
+
+### Optional fields
+
+- **name**: User-readable name for the flow
+- **description**: Description of the flow
+- **product_group**: Attributes team ownership of flow (e.g. `agent_foundations`)
+- **include**: Items the flow accepts from outside the config, see [Catalog Items](#catalog-items)
+
+### Environment
+
+Flow environment declares expected level of interaction between a human and an AI agent,
+Flow Registry `v1` version uses following environments:
+
+| environment      | description |
+| -----------------| ----------- |
+| **chat**         | Designed for the most collaborative experience, where a human and an AI Agent work alongside each other via back and forth conversation within chat-like interface |
+| **chat-partial** | A variation of `chat` environment, designed for efficiency of development, by skipping over all boiler plate for single agent `chat` flows. It offers the same level of interactiveness as `chat` environment |
+| **ambient**      | Designed for hands-off experience, when a human delegates assignment to an agent to be completed in a background. The delegation can be done directly by the human, or even via configured trigger event in GitLab platform. The human participation in `ambient` flows should be as minimal as possible |
+
+## Quick Start
+
+This section provides a step-by-step approach to creating your first flow.
+Follow these steps to build a basic AI agent flow that can interact with the repository files and respond to user
+requests.
+
+1. Create a YAML file at `ai/features/<domain>/my_flow/config/1.0.0.yml` which will configure your
+   flow. The feature directory name is the flow ID, and the version file starts at `1.0.0.yml`
+   (e.g. `my_flow/config/1.0.0.yml` is triggered as `my_flow/v1`). See
+   [Adding and moving features](../adding_and_moving_features.md#add-a-flow-feature) for the feature layout and the
+   [Flow Versioning](index.md#flow-versioning) section for details.
+   The file should have this basic structure:
+
+   ```yaml
+   version: "v1"
+   environment: ambient
+   components:
+      - name: "my_agent" # should use alphanumeric characters or underscore. Must not include characters such as : and .
+        type: AgentComponent
+        prompt_id: "my_flow"
+        prompt_version: "^1.0.0"
+        inputs: ["context:goal"]
+        toolset: ["read_file", "create_file_with_contents"]
+   routers:
+      - from: "my_agent"
+        to: "end"
+   flow:
+      entry_point: "my_agent"
+   ```
+
+1. Create a prompt template in the same feature directory, at
+   `ai/features/<domain>/my_flow/prompts/base/1.0.0.yml`. The prompt ID is the feature directory name:
+
+   ```yaml
+   name: Your prompt name
+   unit_primitives: []
+   prompt_template:
+      system: |
+        You are GitLab Duo Chat, an agentic AI Coding assistant built by GitLab.
+        Your role is to help the user complete their request by using the available tools.
+        Your response style is concise and actionable.
+      user: |
+        Here is my task:
+        {{goal}}
+   params:
+      timeout: 180
+   ```
+
+1. Accessing the new Flow
+
+   To use your new flow, send a `StartWorkflowRequest` with the structured fields:
+
+   ```plaintext
+   flowConfigId: "my_flow"
+   flowConfigSchemaVersion: "v1"
+   flowVersion: "1.0.0"
+   ```
+
+## Component Types
+
+### AgentComponent
+
+The AgentComponent is the primary building block for AI-powered flows.
+An AgentComponent uses a Large Language Model (LLM) to process inputs and generate responses. It provides these
+capabilities:
+
+- Execute tools to interact with the environment (read files, run commands, etc.)
+- Maintain conversation history for context
+- Make decisions based on the provided prompt and available tools
+- Generate structured outputs that other components consume. Output structure can be defined by the use of JSON Schemas
+  as defined in the [ResponseSchemaRegistry](#response-schemas).
+
+The agent uses the prompt template from the prompt registry, processes the inputs through the LLM, and calls tools as
+needed to complete its task.
+
+#### Required Parameters
+
+- **name**: Unique identifier for this component instance. Must not contain `:` or `.` characters.
+- **type**: Must be `"AgentComponent"`
+- **prompt_id**: ID of the prompt template from either the prompt registry or locally defined prompts
+
+#### Optional Parameters
+
+- **prompt_version**: Semantic version constraint (e.g., `"^1.0.0"`). If omitted or `null`, uses locally defined prompt
+  from flow YAML.
+- **response_schema_id**: ID of the response schema to use. Two modes:
+  - **With `response_schema_version`**: loads the schema from the server-side file-based registry.
+  - **Without `response_schema_version`** (omitted): looks up the schema from the flow's inline
+    `response_schemas` block by `schema_id`. This mirrors how `prompt_version: null` routes to a locally
+    defined prompt.
+- **response_schema_version**: Semantic version constraint (e.g. `"^1.0.0"`). When set, the schema is
+  loaded from the file-based registry. Must not be set without `response_schema_id`.
+- **inputs**: List of input data sources (default: `["context:goal"]`)
+- **description**: Human-readable description of the agent's purpose and capabilities. **Required when the agent is
+  used as a sub-agent** (listed in another agent's `subagents`). The supervisor uses this description to help
+  the LLM decide when to delegate tasks to this agent.
+- **toolset**: List of tools available to the agent. Items can be simple tool name strings (e.g., `"read_file"`) or objects mapping a tool name to option overrides. See [Tool Options](#tool-options) for details.
+- **subagents**: List of subagent config dicts this agent supervises. When provided, the agent runs in
+  [Supervisor Mode](#supervisor-mode) and gains access to `delegate_task` and `final_response_tool` automatically.
+  Each entry is a dict that must contain a `"name"` key whose value corresponds to another `AgentComponent` with a
+  `description` field in the same flow config.
+- **max_delegations**: Maximum number of `delegate_task` calls allowed before the supervisor is forced to call
+  `final_response_tool`. Must be ≥ 1 when set. When omitted (default), no delegation limit is enforced. Only
+  applicable in Supervisor Mode.
+- **max_cycles**: Maximum number of ReAct loop iterations (agent → tools → agent → ...) before the agent is
+  instructed to wrap up and provide its final answer without further tool calls. Must be ≥ 1. Defaults to
+  `280`. Ensure that this value is lower than the recursion limit in LangGraph (default `600`) for the entire flow.
+  Each agent cycle takes 2 graph-node transitions (`agent`, `tools`), so effectively this means that your
+  `max_cycles` limit should be at most half of the recursion limit. If `require_tool_approval` is enabled this enables
+  4 nodes (`agent`, `tool_approval_request`, `tool_approval_fetch`, `tools`), so adjust accordingly. This is a **soft
+  limit**: at the threshold, a `HumanMessage` is injected into the conversation history asking the agent to finalize,
+  and the cycle count (`context:{component_name}.cycle_count`) is persisted in state. Unlike the hard `RECURSION_LIMIT`
+  (600 graph node transitions), hitting `max_cycles` does not terminate the workflow — it gives the agent a graceful
+  off-ramp. Set a lower value in YAML to constrain a specific agent more aggressively.
+
+  Accepts either a plain integer (`max_cycles: 280`) or a nested form for explicit control over the
+  approaching-limit warning:
+
+  ```yaml
+  max_cycles:
+    threshold: 280
+    iteration_warning_offset: 10  # warn 10 cycles before threshold; null disables the warning
+  ```
+
+  `iteration_warning_offset` is the number of cycles *before* `threshold` at which a one-time
+  `HumanMessage` is injected warning the agent that it is approaching the soft limit and will not be able
+  to make further tool calls once it hits it. Must be ≥ 0. The warning is **on by default** — when omitted
+  (either the plain-integer form, or the nested form without `iteration_warning_offset`), it defaults to
+  `min(10, threshold // 2)`, floored at one cycle, so small thresholds still get a warning. For
+  example, `max_cycles: 4` warns on cycle 2, and `max_cycles: 2` warns on cycle 1 — a tight budget is
+  where the agent most needs to know how little room it has. Only a `threshold` of 1 gets no warning,
+  since there is no cycle left to warn on.
+  Explicitly setting `iteration_warning_offset` to a value `>= threshold` in the nested form is treated
+  as a misconfiguration and raises a validation error — set it to `null` instead to disable the warning
+  entirely.
+- **max_wrap_up_retries**: Maximum number of times the agent is allowed to ignore the wrap-up instruction
+  (i.e. continue making non-final tool calls after `max_cycles` is reached) before an `AgentStuckError` is
+  raised and the workflow terminates. Must be ≥ 1. Defaults to `3`. Each time the agent ignores the
+  wrap-up instruction, the instruction is re-injected into the conversation history. If the agent still
+  does not comply after `max_wrap_up_retries` attempts, the workflow is terminated with an error.
+- **identical_tool_call_limit**: Number of consecutive times the agent may issue the exact same tool-call batch
+  (same tools, same arguments) with identical results before the batch is skipped. Must be `0` (disabled, the
+  default) or ≥ 3: the guard compares the results of the two previous executions, so it needs three repeats before
+  it can trip. At the limit the tools are not executed; instead the agent receives a `ToolMessage` per call telling it
+  to use the result it already has. After two unheeded nudges the message escalates to a wrap-up instruction, and
+  after `max_wrap_up_retries` unheeded wrap-ups an `AgentStuckError` is raised. A call whose result changes between
+  runs (e.g. polling a pipeline) never trips the guard, and a text-only reply, a different call, or an injected
+  `HumanMessage` resets the count. Applies in both plain and [Supervisor Mode](#supervisor-mode).
+- **model_tags**: One or more tag strings used to select a model for this component. A single tag selects the model
+  mapped to that tag in the feature's `models_for_tags` configuration
+  (see [Model tag configuration](../model_selection.md#model-tag-configuration)). When a list is given, the first tag
+  that maps to a configured model wins (first-match semantics). If no tag is configured, or this field is omitted
+  (default: `null`), the feature's `default_model` is used instead. Use
+  this to route lightweight tasks (e.g. exploration, summarisation) to a smaller, faster model and complex tasks
+  (e.g. planning, code generation) to a larger, more capable model. Example: `model_tags: ["large", "claude"]`.
+- **model_size_preference** _(deprecated)_: Accepted for backward compatibility with existing Flow Registry v1
+  configs. When set, its value is automatically mapped to `model_tags` (e.g. `model_size_preference: "small"` is
+  equivalent to `model_tags: "small"`). If both `model_tags` and `model_size_preference` are provided, `model_tags`
+  takes precedence. Migrate to `model_tags` for all new flows.
+- **compaction**: Configuration for conversation compaction. When enabled, automatically summarizes older conversation
+  history to stay within token limits. See [Conversation Compaction](../context_management/compaction.md) for details.
+- **enable_web_search**: Opt in to the provider-native web-search tool, so the agent can look up material that is
+  not in the repository (changelogs, migration guides, advisories). Defaults to `false`. Opting in is necessary but
+  not sufficient: the tool is bound only when the `dependency_bump_web_search` feature flag is on and the client
+  declares the `web_search` capability, and only native-Anthropic models honor it (LiteLLM discards it). The same
+  three-way gate is exposed to the prompt template as `tools_enabled["web_search"]`, so a template can describe the
+  search route only when it is actually available.
+- **ui_log_events**: UI logging configuration (default: `[]`, no UI output). See [UI Log Events](#ui-log-events).
+- **ui_role_as**: Display role in UI (`"agent"` or `"tool"`)
+
+##### Defaults under `chat-partial`
+
+In the `chat-partial` environment, `AgentComponent` fills the defaults the chat surface guarantees. A declared
+`ui_log_events` or `require_tool_approval` wins, including an empty `ui_log_events`.
+
+| Parameter | Default | Under `chat-partial` |
+|-----------|---------|----------------------|
+| `ui_log_events` | `[]`, no UI output | `on_agent_final_answer`, `on_agent_reasoning`, `on_tool_execution_success`, `on_tool_execution_failed` |
+| `require_tool_approval` | `false` | `true` |
+| `pre_approved_tools` | `[]` | Not applied, so a declared list is cleared ([ai-assist#2744](https://gitlab.com/gitlab-org/modelops/applied-ml/code-suggestions/ai-assist/-/work_items/2744)) |
+
+#### Available Tools
+
+Agents access the following tools in their `toolset` configuration.
+Complete list of tools classes can be located at `duo_workflow_service/components/tools_registry.py`. To configure an
+agent with tools, pass `name` attributes from their classes, eg: for `GetIssue` tool class pass `get_issue`
+Each tool is a Python class that the agent calls to perform specific actions.
+
+Here are some examples:
+
+- **read_file**: Read contents of a file
+- **create_file_with_contents**: Create a new file with specified content
+- **edit_file**: Modify an existing file
+- **list_dir**: List directory contents
+- **find_files**: Search for files matching patterns
+- **get_repository_file**: Read a single file from a remote GitLab repository
+- **get_repository_files**: Bulk-read multiple files from a remote GitLab repository; accepts explicit paths and
+  fnmatch-style glob patterns (e.g. `*.py`, `src/*.py`). Glob patterns trigger a recursive tree listing to discover
+  matching blobs. Results are capped by `per_page` (default 20, max 50); when truncated a `__truncated__` key is
+  included in the result with the total match count and a suggestion to refine the pattern.
+- **list_repository_tree**: List files and directories in a remote GitLab repository
+
+#### Tool Options
+
+Tool options allow flows to override any valid tool parameter at the component level, ensuring specific values are
+enforced regardless of what the LLM provides. Option keys are validated against the tool's input schema at initialization
+time, so any parameter defined on a tool's input model can be used as a tool option. At execution time, tool options
+take precedence over LLM-provided values by overwriting matching keys in the tool's kwargs.
+
+This is useful when a workflow requires controlled tool behavior, for example forcing notes to be internal in
+security-focused flows, or setting default values that the LLM cannot override.
+
+Toolset items in the YAML configuration support two formats:
+
+- **Simple string**: `"tool_name"` (no overrides, LLM controls all parameters)
+- **Object with options**: Tool name as key with an options object as value (options override LLM-provided values)
+
+```yaml
+toolset:
+  - "get_merge_request"                    # simple string, no overrides
+  - "create_merge_request_note":           # object with options
+      "internal": true
+```
+
+When tool options are specified, the tool instance is cloned per-component so that different components using the same
+tool can have independent option configurations without cross-contamination.
+
+##### How Tool Options Work
+
+- **Validation**: At toolset initialization, each option key is validated against the tool's Pydantic input schema (`args_schema`). If an option key does not match a valid parameter, a `ValueError` is raised. Option values must be flat (primitives, flat lists, or flat dicts); nested structures are rejected.
+
+Since any valid parameter can be overridden, this pattern works generically across all tools. For example, you could override `body`, `internal`, `project_id`, or any other parameter defined on a tool's input schema.
+
+#### Prompts
+
+Prompts define how the AI agent behaves and responds to inputs.
+Every AgentComponent requires a prompt that serves as the "instructions" for the AI agent, defining its personality,
+capabilities, and response patterns.
+Prompts include placeholders that get replaced with actual data from the flow state.
+
+##### Prompt Sources
+
+Flows can use prompts from two sources:
+
+1. **File-based Prompts**: Prompts stored in the AI Gateway prompt registry, in a feature's `prompts/` directory
+   under `ai/features/` or in the legacy `ai_gateway/prompts/definitions/` root. Reference these using both `prompt_id`
+   and `prompt_version` (e.g., `prompt_version: "^1.0.0"`). New prompts go under `ai/features/`, see
+   [Adding and moving features](../adding_and_moving_features.md).
+
+1. **Locally Defined Prompts**: Prompts defined directly within the flow YAML configuration. Reference these by setting
+   `prompt_version: null` or omitting the `prompt_version` field entirely.
+
+##### Locally Defined Prompts
+
+Flows can define prompts locally within their YAML configuration, eliminating the need for separate prompt definition
+files. This approach is particularly useful for flow-specific prompts or rapid prototyping.
+
+To define prompts locally, add a `prompts` section to your flow YAML:
+
+```yaml
+version: "v1"
+environment: ambient
+
+components:
+    - name: "code_analyzer"
+      type: AgentComponent
+      prompt_id: "my_local_prompt"
+      # prompt_version omitted - uses local prompt
+      ui_log_events: [ "on_agent_final_answer" ]
+      inputs: ["context:goal"]
+      toolset: ["read_file", "list_dir"]
+
+prompts:
+    - prompt_id: "my_local_prompt"
+      name: "Code Analysis Assistant"
+      unit_primitives: []
+      prompt_template:
+          system: "You are a helpful assistant specialized in code analysis"
+          user: "{{goal}}"
+      params:
+          timeout: 180
+
+routers:
+    - from: "code_analyzer"
+      to: "end"
+
+flow:
+    entry_point: "code_analyzer"
+
+```
+
+**Routing Logic**: The system automatically routes between local and file-based prompts:
+
+- `prompt_version: null` or omitted → Use local prompt from flow YAML
+- `prompt_version: "^1.0.0"` → Use file-based prompt from prompt registry
+
+**Local Prompt Structure**:
+
+Locally defined prompts use the `InMemoryPromptConfig` Pydantic model (defined in `ai_gateway/prompts/config/base.py`), which extends the standard `PromptConfig` with an additional `prompt_id` field for local identification. The structure includes:
+
+<!-- vale gitlab_base.Substitutions = NO -->
+**Required Fields**:
+
+- **prompt_id**: Unique identifier for referencing this prompt from components (required for local prompts)
+- **name**: Human-readable name for the prompt (non-op may be same as `prompt_id`)
+- **unit_primitives**: List of GitLab unit primitives (required for local prompts); use an empty list (`[]`) when the prompt needs none.
+- **prompt_template**: Dictionary containing prompt text sections:
+  - **system**: System prompt defining agent behavior and personality
+  - **user**: User prompt with template placeholders (e.g., `{{goal}}`, `{{task_description}}`)
+  - **placeholder**: Optional. Explicitly declares a `MessagesPlaceholder` for dynamic message injection. The `history`
+    placeholder is automatically added to every prompt, so you no longer need to include it manually.
+
+**Optional Fields**:
+
+- **tool_output_security**: Set to `false` to skip the tool-output security notice at the start of the system prompt
+  (default: `true`). A prompt that binds tools always gets the notice, even when this is `false`.
+- **params**: Additional prompt configuration (`PromptParams`)
+  - **timeout**: Request timeout in seconds (float)
+  - **stop**: List of stop sequences that terminate generation (list of strings)
+  - **vertex_location**: Geographic location for Vertex AI deployments (string)
+
+**Deprecated Fields**:
+
+- **model**: The `model` field is no longer supported. Model configuration is automatically inherited from project or instance-level settings via `model_metadata`.
+
+This structure mirrors the file-based prompt configuration from the prompt registry, ensuring consistency across both approaches. The `InMemoryPromptConfig` model enforces strict validation with `extra="forbid"`, preventing unexpected fields and catching configuration errors at load time.
+
+For detailed information about prompt templates and placeholder configuration, see
+the [AI Gateway Prompt Registry Documentation](../aigw_prompt_registry.md#message-placeholders).
+<!-- vale gitlab_base.Substitutions = YES -->
+
+**Benefits of Local Prompts**:
+
+- **Rapid Development**: No need to create separate prompt files
+- **Flow Coupling**: Prompts stay co-located with their usage
+- **Simplified Testing**: Easy to iterate on prompts during development
+- **Self-Contained**: Flows become more portable and self-documented
+
+#### Inputs
+
+Agent inputs work together with prompt placeholders to provide dynamic data to the AI.
+When you define inputs in your component configuration, that data becomes available as template variables in your
+prompt.
+
+For example:
+
+```yaml
+# In your flow YAML:
+inputs:
+    - from: "context:user_request"
+      as: "task_description"
+    - from: "context:analyzer.findings"
+      as: "analysis_results"
+```
+
+```yaml
+# In your prompt template:
+user: |
+    Task: {{task_description}}
+    Analysis: {{analysis_results}}
+    Please provide a solution.
+```
+
+#### Outputs
+
+Each AgentComponent automatically produces:
+
+- **context:{component_name}.final_answer**: The agent's final response (string for default schema, dict for custom schemas)
+- **conversation_history:{component_name}**: Message history
+- **status**: Updated workflow status
+
+When using custom response schemas, the component also produces field-level outputs for each schema field:
+
+- **context:{component_name}.final_answer.{field_name}**: Individual field from custom schema response
+
+For example, a custom schema with fields `summary`, `score`, and `recommendations` would produce:
+
+- `context:{component_name}.final_answer` (full dict)
+- `context:{component_name}.final_answer.summary`
+- `context:{component_name}.final_answer.score`
+- `context:{component_name}.final_answer.recommendations`
+
+These outputs can be used as inputs by other components or referenced in routing logic to control flow execution.
+For example, you might route to different components based on whether the agent's final answer equals to specific phrase
+
+#### Response Schemas
+
+Response schemas define the structure and validation rules for an agent's final output. By default, agents use
+`AgentFinalOutput` which returns a simple string in the `final_response` field. Custom response schemas allow you to
+define structured outputs with multiple fields, type validation, and constraints.
+
+**When to use custom response schemas:**
+
+- You need structured output with multiple fields (e.g., `summary`, `score`, `findings`)
+- You want type validation on agent outputs (strings, integers, arrays, etc.)
+- You need to parse agent outputs programmatically in downstream components
+- You want to enforce specific output formats (e.g., scores 1-10, required fields)
+
+##### Inline Response Schemas (the `response_schemas` block)
+
+For custom flows (sent inline over the wire) or any flow that does not need a versioned server-side schema file,
+you can define response schemas directly in the flow YAML using a top-level `response_schemas` block. This mirrors
+exactly how inline prompts work via the `prompts` block.
+
+Each entry has:
+
+- **`schema_id`**: The identifier used by components to reference this schema via `response_schema_id` (with no
+  `response_schema_version`).
+- **`definition`**: The [JSON Schema](https://json-schema.org/) as either a YAML mapping or a raw JSON string
+  (useful when pasting from an external source).
+
+**YAML mapping form:**
+
+```yaml
+components:
+  - name: "code_reviewer"
+    type: AgentComponent
+    prompt_id: "code_review_prompt"
+    response_schema_id: "code_review"   # no response_schema_version = inline lookup
+    toolset: []
+
+response_schemas:
+  - schema_id: "code_review"
+    definition:
+      "$schema": "http://json-schema.org/draft-07/schema#"
+      title: "code_review_response"
+      type: object
+      properties:
+        summary:
+          type: string
+          description: "Brief summary of findings"
+        overall_score:
+          type: integer
+          minimum: 1
+          maximum: 10
+      required: [summary, overall_score]
+```
+
+**Raw JSON string form** (paste directly from a JSON editor):
+
+```yaml
+response_schemas:
+  - schema_id: "code_review"
+    definition: |
+      {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "code_review_response",
+        "type": "object",
+        "properties": {
+          "summary": { "type": "string" },
+          "overall_score": { "type": "integer", "minimum": 1, "maximum": 10 }
+        },
+        "required": ["summary", "overall_score"]
+      }
+```
+
+> [!note]
+> The `title` field in the schema definition is optional. If omitted, the `schema_id` is used as the tool title
+> (the function name the LLM calls to deliver its structured answer).
+>
+> For nested `object` properties that also omit `title`, a name is auto-generated from the parent field name
+> (e.g. a field called `review_details` produces a nested model named `ReviewDetailsItem`). This is an
+> implementation detail — if you need a predictable nested model name, add an explicit `title` to the nested
+> object definition.
+
+##### Response Schema Registry
+
+Response schemas can also be sourced from the Response Schema Registry. The Response Schema Registry
+requires versioned [JSON Schema](https://json-schema.org/) files stored in `ai_gateway/response_schemas/definitions/`.
+Similar to the prompt library, the path and filename defines the ID and version of the schema, respectively.
+
+For example`ai_gateway/response_schemas/definitions/analysis/code_review/base/1.0.0.json` maps to
+`response_schema_id: analysis/code_review` and `response_schema_version: 1.0.0`.
+
+Example Response Schema directory structure:
+
+```plaintext
+ai_gateway/response_schemas/definitions/
+  ├── general/
+  │   └── structured_response/
+  │       └── base/
+  │           └── 1.0.0.json
+  └── analysis/
+      └── code_review/
+          └── base/
+              └── 1.0.0.json
+```
+
+##### Using a Response Schema in a Flow Config YAML
+
+> [!note]
+> Both `response_schema_id` and `response_schema_version` must be provided in order to load a response schema from a
+> JSON schema file.
+
+```yaml
+  components:
+      - name: "code_reviewer"
+        type: AgentComponent
+        prompt_id: "code_review/detailed_analysis"
+        prompt_version: "^1.0.0"
+        response_schema_id: "analysis/code_review"      # Schema location
+        response_schema_version: "^1.0.0"                # Version constraint
+        inputs:
+            - from: "context:code_changes"
+              as: "changes"
+        toolset:
+            - read_file
+            - search_code
+```
+
+Response schemas support semantic versioning with version constraints:
+
+| Constraint | Matches            | Description        |
+|------------|--------------------|--------------------|
+| `1.0.0`    | Exactly `1.0.0`    | Exact version      |
+| `^1.0.0`   | `≥1.0.0`, `<2.0.0` | Compatible updates |
+| `~1.0.0`   | `≥1.0.0`, `<1.1.0` | Patch updates only |
+| `>=1.0.0`  | `≥1.0.0`           | Any version 1.0.0+ |
+
+###### Response Schema Definition Files (JSON Schema)
+
+Response schemas use JSON Schema format, some important fields include:
+
+- `$schema`: defines the [schema dialect](https://json-schema.org/understanding-json-schema/reference/schema) used for
+  the JSON Schema file. The defaults to `draft-07` if not provided.
+- `title`: maps to the tool name that the agent will call. **Note:** the title cannot be the same as an existing tool. If a name collision occurs this will raise a `ValueError`.
+- `description`: human readable description of schema, also shown to the agent as part of tool instruction.
+- `type`: must be `"object"`.
+- `properties`: nested JSON objects defining the fields for the Pydantic Model. The following property fields are
+  converted to the Pydantic Model and passed to the agent:
+  - `key`: Become the Field Name.
+  - `type`: Mapped to Python type. Support "object" to allow nested JSON Schema objects.
+  - `description`: Field description.
+  - Validation constraints: Constraints for the field, depending on type (see [Validation Constraints](#validation-constraints) for more information.)
+- `required`: the fields which are required in the output.
+
+###### Validation Constraints
+
+Below are a list of all the compatible JSON Schema constraints that are supported by AgentComponent Response Schema.
+
+**Numeric Constraints (integer/number)**
+
+| JSON Schema Constraint | Pydantic Field Parameter | Description                                          |
+  |------------------------|--------------------------|------------------------------------------------------|
+| `minimum`              | `ge=`                    | Minimum value (inclusive) - greater than or equal to |
+| `maximum`              | `le=`                    | Maximum value (inclusive) - less than or equal to    |
+| `exclusiveMinimum`     | `gt=`                    | Minimum value (exclusive) - greater than             |
+| `exclusiveMaximum`     | `lt=`                    | Maximum value (exclusive) - less than                |
+| `multipleOf`           | `multiple_of=`           | Value must be a multiple of this number              |
+
+**String Constraints**
+
+| JSON Schema Constraint | Pydantic Field Parameter | Description                                      |
+  |------------------------|--------------------------|--------------------------------------------------|
+| `minLength`            | `min_length=`            | Minimum string length in characters              |
+| `maxLength`            | `max_length=`            | Maximum string length in characters              |
+| `pattern`              | `pattern=`               | Regular expression pattern the string must match |
+
+**Array Constraints**
+
+| JSON Schema Constraint | Pydantic Field Parameter | Description                      |
+  |------------------------|--------------------------|----------------------------------|
+| `minItems`             | `min_length=`            | Minimum number of items in array |
+| `maxItems`             | `max_length=`            | Maximum number of items in array |
+
+**Enumeration and Constants**
+
+| JSON Schema Constraint | Python Type                | Description                               |
+  |------------------------|----------------------------|-------------------------------------------|
+| `enum`                 | `Literal[val1, val2, ...]` | Field must be one of the specified values |
+| `const`                | `Literal[value]`           | Field must be exactly this value          |
+
+**Metadata**
+
+| JSON Schema Field | Pydantic Field Parameter | Description                                      |
+  |-------------------|--------------------------|--------------------------------------------------|
+| `default`         | `default=`               | Default value for optional fields                |
+| `examples`        | `examples=`              | Example values (shown to the agent for guidance) |
+
+###### Example JSON Schema
+
+Below is an example JSON Schema using `draft-07` schema:
+
+```json
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "code_review_response_tool",
+    "type": "object",
+    "properties": {
+        "summary": {
+            "type": "string",
+            "description": "Brief summary of the code review findings"
+        },
+        "issues_found": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "severity": {
+                        "type": "string",
+                        "enum": [
+                            "low",
+                            "medium",
+                            "high",
+                            "critical"
+                        ]
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "file_path": {
+                        "type": "string"
+                    },
+                    "line_number": {
+                        "type": "integer"
+                    }
+                },
+                "required": [
+                    "severity",
+                    "description"
+                ]
+            }
+        },
+        "recommendations": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "overall_score": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+        }
+    },
+    "required": [
+        "summary",
+        "issues_found",
+        "overall_score"
+    ]
+}
+```
+
+##### How Response Schemas work
+
+The agent will be instructed to use this schema as a tool call for its final response. Responses are
+automatically validated against the schema structure using Pydantic.
+
+When a custom schema is configured:
+
+1. Schema Loading: The registry loads the JSON schema and converts it to a Pydantic model
+1. Tool Binding: The schema is added to the agent's available tools list
+1. Agent Response: The agent calls the schema tool with structured data for its final response
+1. Validation: The response is validated against the schema
+1. Error Handling: If validation fails, the agent receives an error and can retry
+
+##### Using Response Schema Field Outputs
+
+When using custom response schemas, individual fields are automatically available as component outputs. This enables
+downstream components to access specific fields directly without parsing the full response:
+
+```yaml
+components:
+    - name: "code_reviewer"
+      type: AgentComponent
+      prompt_id: "code_review/detailed_analysis"
+      prompt_version: "^1.0.0"
+      response_schema_id: "analysis/code_review"
+      response_schema_version: "^1.0.0"
+      inputs:
+          - from: "context:code_changes"
+            as: "changes"
+      toolset: [ "read_file" ]
+
+    - name: "prioritizer"
+      type: AgentComponent
+      prompt_id: "prioritize_issues"
+      prompt_version: "^1.0.0"
+      inputs:
+          # Access individual field from previous component's structured output
+          - from: "context:code_reviewer.final_answer.issues_found"
+            as: "issues"
+          - from: "context:code_reviewer.final_answer.overall_score"
+            as: "quality_score"
+      toolset: [ ]
+
+routers:
+    - from: "code_reviewer"
+      to: "prioritizer"
+    - from: "prioritizer"
+      to: "end"
+```
+
+This approach is cleaner and more maintainable than extracting fields manually from the full response dict.
+
+#### Usage Modes
+
+AgentComponent can be used in three modes:
+
+1. **Standalone Mode**: Used as a regular component in the flow. The `description` field is optional.
+1. **Managed Mode**: Used as a sub-agent delegated to by a supervisor agent. In this mode:
+   - The `description` field is **required**
+   - The component must be listed in the supervisor's `subagents`
+   - The supervisor binds the agent to subsession-scoped conversation history
+   - Output keys are dynamically resolved based on the active subsession
+1. **Supervisor Mode**: Orchestrates multiple specialised sub-agents via explicit delegation. Enabled by providing the
+   `subagents` parameter. See [Supervisor Mode](#supervisor-mode) below.
+
+#### UI Log Events
+
+The AgentComponent supports the following UI log events that can be specified in the `ui_log_events` configuration:
+
+- **on_agent_final_answer**: Logged when the agent produces its final response. This event captures the agent's
+  conclusion or final output and displays it in the UI.
+  **Security Note:** If the agent's final answer contains sensitive information (e.g., security findings), enabling this
+  event will cause that information to be visible on the session detail page in the UI and in the CI job log.
+- **on_agent_reasoning**: Logged for every agent message that has text, including the text that comes with tool calls.
+  Token streaming needs both this event and `on_agent_final_answer`, because a chunk cannot be told apart as one or the
+  other while it is produced.
+- **on_tool_execution_success**: Logged when a tool is successfully executed by the agent. This shows users what actions
+  the agent took and their successful results.
+- **on_tool_execution_failed**: Logged when a tool execution fails. This provides error information and helps with
+  debugging failed operations.
+
+#### Tool Approval
+
+`AgentComponent` supports human-in-the-loop tool approval. When enabled, the workflow pauses execution after the agent
+generates tool calls, presents them to the user for review, and waits for the user's decision before proceeding.
+
+##### Optional Parameters
+
+- **require_tool_approval**: `bool` — Enable tool approval for this component (default: `false`, or `true` under
+  `chat-partial`).
+- **pre_approved_tools**: `list[str]` — List of tool names that skip the approval step (default: empty list; not
+  applied under `chat-partial`).
+
+##### Supported Event Types
+
+- **APPROVE**: User approves the tool execution. Workflow proceeds to execute the tools normally.
+- **REJECT**: User rejects the tool execution. Rejection messages are added to the conversation history and the workflow
+  returns to the agent to try alternative approaches.
+- **MODIFY**: User rejects with feedback. Rejection messages plus the user's feedback are added to the conversation
+  history, allowing the agent to understand why the approach was rejected and adjust accordingly.
+- **RESPONSE**: The user sends a message instead of a decision. Handled like **MODIFY**: the tool calls are rejected and
+  the message reaches the agent as feedback.
+
+A **MODIFY** or **RESPONSE** without a message is an invalid request, and the approval stays pending.
+
+##### UI Log Events
+
+- **on_tool_approval_request**: Logged when tool calls require approval. Displays the tool name and arguments to the
+  user for review. Enabled automatically whenever `require_tool_approval` is set, so it does not need to be declared in
+  `ui_log_events`: the flow blocks on the prompt, so it is never opt-in.
+- **on_tool_approval_feedback**: Logged when the user rejects with feedback (a **MODIFY** decision) or sends a message
+  instead of a decision. It records the user's own message so it appears in the session view. Enabled automatically
+  alongside `on_tool_approval_request`, and for the same reason: the component that owns the interrupt owns this entry,
+  so making it opt-in would silently drop the user's message.
+
+##### Approval Entry Shape
+
+Approval entries always use `message_type: request` — independently of the component's `ui_role_as`, which governs
+only its other entries — because that is the field clients key their approve/reject controls off.
+
+Each entry also carries:
+
+- `message_id`: the originating tool call's own ID, so the entry resolves the pending card a client already rendered
+  for that call rather than duplicating it.
+- `component_name`: the agent that requested approval.
+- `subsession_id`: the subsession that requested approval when the agent is a sub-agent under a supervisor, and
+  `null` otherwise.
+
+The last two let a client name the agent asking for permission, which a shared tool name cannot identify.
+
+The feedback entry recorded for a **MODIFY** decision uses `message_type: user` — the same shape
+`HumanInputComponent` gives a user's reply, `status` included — and carries the same `component_name` and
+`subsession_id`, so the reply stays attributed to the agent whose approval it answered.
+
+##### Pre-Approval Behavior
+
+A tool call skips approval if any of the following applies:
+
+1. **Component-level**: The tool is listed in the `pre_approved_tools` parameter.
+1. **Workflow-level**: The tool is covered by `pre_approved_agent_privileges` in the workflow `startRequest`.
+1. **Session-level**: The user previously chose "Approve for Session" for an identical call. Session approvals are
+   persisted on the GitLab instance and matched per-call on tool name plus canonicalized arguments — the same tool
+   with different arguments still prompts. This check is fail-closed: if it cannot be completed (for example, a
+   network error), the call falls back to requiring approval.
+
+If all tool calls in a batch are approved from any of these sources, the approval flow is skipped entirely and tools
+execute immediately.
+
+When the GitLab instance enables the governance ceiling, it sets `ceiling: true` in the signed `tool_access_policies`
+claim. Component-level and workflow-level pre-approvals then only apply to tools in the admin allow list, plus the
+default tools that are always pre-approved. `start_flow` also keeps its pre-approval, and so do the read-only tools
+unless the allow list is empty or the claim has an ask or deny rule on a tool that is not a write tool. A listed tool
+outside these asks for approval instead.
+Session-level approvals are not affected.
+
+##### Example
+
+```yaml
+components:
+    - name: "code_editor"
+      type: AgentComponent
+      prompt_id: "code_assistant"
+      prompt_version: "^1.0.0"
+      require_tool_approval: true
+      pre_approved_tools: [ "read_file", "list_dir", "find_files" ]  # Read-only tools skip approval
+      toolset: [ "read_file", "list_dir", "find_files", "edit_file", "run_command" ]
+      ui_log_events:  # on_tool_approval_request is implied by require_tool_approval
+          - "on_agent_final_answer"
+          - "on_tool_execution_success"
+          - "on_tool_execution_failed"
+      inputs: ["context:goal"]
+```
+
+#### Complete AgentComponent Example
+
+```yaml
+components:
+    - name: "code_assistant"
+      type: AgentComponent
+      prompt_id: "code_review_helper"
+      prompt_version: "^1.0.0"
+      inputs: [ "context:goal" ]
+      max_cycles: 20  # after 20 ReAct iterations, agent must wrap up
+      require_tool_approval: true
+      pre_approved_tools: [ "read_file", "list_dir", "find_files" ]
+      toolset:
+          - "read_file"
+          - "list_dir"
+          - "find_files"
+          - "create_file_with_contents"
+          - "create_merge_request_note":
+              "internal": true
+          - "edit_file"
+      ui_log_events:
+          - "on_agent_final_answer"
+          - "on_tool_execution_success"
+          - "on_tool_execution_failed"
+      ui_role_as: "agent"
+```
+
+#### Supervisor Mode
+
+When `subagents` is provided, the AgentComponent acts as a supervisor that orchestrates multiple specialized
+sub-agents via explicit delegation. The supervisor runs a standard ReAct loop but has access to a `delegate_task` tool
+in addition to its regular tools. When the LLM calls `delegate_task`, the framework:
+
+1. Assigns or resumes a numbered **subsession** for the named sub-agent
+1. Seeds the sub-agent's conversation history with the delegation prompt
+1. Routes execution to the sub-agent's ReAct loop
+1. On sub-agent completion, injects the result back into the supervisor's history as a `ToolMessage` and returns
+   control to the supervisor
+
+The supervisor can start new subsessions or resume prior ones by providing the `subsession_id` returned in the
+delegation result.
+
+##### Supervisor Constraints
+
+- `subagents` must contain at least one entry.
+- Every entry's `name` value in `subagents` must reference an `AgentComponent` with a `description` field defined in the same
+  flow config.
+- An `AgentComponent` may be owned by at most one supervisor; the flow builder removes it from the top-level component
+  list once claimed.
+- The flow builder scans all components to resolve sub-agent dependencies, so managed `AgentComponent` entries may
+  appear anywhere in the `components` list relative to their supervisor.
+- The prompt should instruct the LLM on when and how to use `delegate_task` and `final_response_tool`.
+
+##### Supervisor Outputs
+
+- **conversation_history:{supervisor_name}**: The supervisor's own message history
+- **context:{supervisor_name}.final_answer**: The supervisor's final response
+- **status**: Updated workflow status
+
+##### Complete Supervisor Mode Example
+
+```yaml
+components:
+    - name: "developer"
+      type: AgentComponent
+      description: "Implements code changes, creates and edits files."
+      prompt_id: "developer_agent"
+      toolset:
+          - "read_file"
+          - "edit_file"
+          - "create_file_with_contents"
+          - "list_dir"
+
+    - name: "tester"
+      type: AgentComponent
+      description: "Writes and runs automated tests."
+      prompt_id: "tester_agent"
+      toolset:
+          - "read_file"
+          - "create_file_with_contents"
+          - "run_command"
+
+    - name: "supervisor"
+      type: AgentComponent
+      prompt_id: "supervisor_agent"
+      subagents:
+          - name: "developer"
+          - name: "tester"
+      max_delegations: 20
+      toolset:
+          - "get_issue"
+      ui_log_events:
+          - "on_agent_final_answer"
+          - "on_tool_execution_success"
+          - "on_tool_execution_failed"
+
+routers:
+    - from: "supervisor"
+      to: "end"
+
+flow:
+    entry_point: "supervisor"
+```
+
+### DeterministicStepComponent
+
+The DeterministicStepComponent executes a **single tool** deterministically with predetermined arguments extracted from the flow state. This component provides a way to run one specific tool without AI involvement, using inputs to extract the necessary parameters and producing predictable outputs following fixed conventions.
+
+The component provides these capabilities:
+
+- **Execute a single tool deterministically**: Run one designated tool with parameters derived from inputs
+- **Extract parameters from state**: Use component inputs to gather the tool's execution arguments
+- **No AI involvement**: Direct tool execution without LLM processing
+- **Integration with existing toolsets**: Compatible with any registered tool in the toolset
+- **Chainable design**: Multiple DeterministicStepComponents can be chained to execute sequential tool operations
+
+Unlike AgentComponent or OneOffComponent which use AI to determine tool usage, DeterministicStepComponent executes exactly one pre-specified tool with arguments extracted directly from the flow state, making it ideal for predictable, repeatable operations. **To execute multiple tools, chain multiple DeterministicStepComponents together in your flow.**
+
+#### Required Parameters
+
+- **name**: Unique identifier for this component instance. Must not contain `:` or `.` characters.
+- **type**: Must be `"DeterministicStepComponent"`
+- **tool_name**: Name of the single tool to execute
+
+#### Optional Parameters
+
+- **toolset**: Toolset containing the tool to be executed. (If no toolset is specified, a new one is created with only the `tool_name`)
+- **inputs**: List of input data sources to extract tool parameters (default: empty list)
+- **ui_log_events**: UI logging configuration for displaying tool execution
+- **ui_role_as**: Display role in UI (default: `"tool"`)
+
+#### Outputs
+
+Each DeterministicStepComponent automatically produces:
+
+- **ui_chat_log**: UI logging information for tool execution events
+- **context:{component_name}.tool_responses**: Record of successful tool execution results
+- **context:{component_name}.error**: Record of any errors during the tool call
+- **context:{component_name}.execution_result**: Status of the execution ("success" or "failed")
+
+#### Complete DeterministicStepComponent Example
+
+##### Execute a single tool
+
+```yaml
+components:
+   - name: "read"
+     type: DeterministicStepComponent
+     inputs:
+       - from: "context:goal"
+         as: "file_path"
+     tool_name: "read_file"
+     ui_log_events:
+       - "on_tool_execution_success"
+       - "on_tool_execution_failed"
+```
+
+##### Chain multiple tools
+
+```yaml
+components:
+    - name: "read_config"
+      type: DeterministicStepComponent
+      inputs:
+          - from: "context:goal"
+            as: "config_path"
+      tool_name: "read_file"
+    - name: "backup_config"
+      type: DeterministicStepComponent
+      inputs:
+          - from: "context:read_config.tool_responses"
+            as: "contents"
+          - from: "config_backup.txt"
+            as: "file_path"
+            literal: true
+      tool_name: "create_file_with_contents"
+```
+
+#### Validation
+
+The DeterministicStepComponent performs automatic validation of tool arguments:
+
+- Validates that the specified tool exists in the provided toolset
+- Checks that all required tool parameters are configured in the inputs
+- Verifies that configured parameters match the tool's expected schema
+- Raises clear validation errors during component initialization if configuration is invalid
+
+This validation ensures that tool execution errors are caught at configuration time rather than runtime.
+
+### OneOffComponent
+
+The `OneOffComponent` functionally sits in-between the `AgentComponent` and the `DeterministicStepComponent`.
+`OneOffComponent` works by taking a pre-defined toolset with an input and generating tool calls in a single round, then
+finally exiting when those tool calls have been successfully executed.
+The component has the ability to retry failed tool executions and iterate up to the `max_correction_attempts`.
+
+The `OneOffComponent` is designed for scenarios where you need to execute one or more tool operations in a single round
+with built-in error handling and retry logic.
+Unlike the `AgentComponent` which can engage in multi-turn conversations and generate additional tool calls after seeing
+results,
+`OneOffComponent` is constrained to a single round of tool generation and execution.
+
+#### Key Features
+
+- **Single Round Tool Execution**: Executes one or more tool calls in a single round and exits upon successful
+  completion
+- **Multiple Tool Support**: Can use multiple tools from its toolset as needed to complete the task
+- **Error Correction**: Automatically retries failed tool executions with error feedback
+- **Configurable Retry Logic**: Set maximum correction attempts via `max_correction_attempts` parameter
+- **Built-in Tool Routing**: Intelligent routing between LLM and tool nodes based on execution results
+- **UI Logging**: Comprehensive logging of tool execution states and results
+
+#### Required Parameters
+
+- **name**: Unique identifier for this component instance
+- **type**: Must be `"OneOffComponent"`
+- **prompt_id**: ID of the prompt template from either the prompt registry or locally defined prompts
+- **toolset**: List of tools available to the component
+
+#### Optional Parameters
+
+- **prompt_version**: Semantic version constraint (e.g., `"^1.0.0"`). If omitted or `null`, uses locally defined prompt
+  from flow YAML.
+- **inputs**: List of input data sources (default: `["context:goal"]`)
+- **model_tags**: One or more tag strings used to select a model for this component. A single tag selects the model
+  mapped to that tag in the feature's `models_for_tags` configuration
+  (see [Model tag configuration](../model_selection.md#model-tag-configuration)). When a list is given, the first tag
+  that maps to a configured model wins (first-match semantics). If no tag is configured, or this field is omitted
+  (default: `null`), the feature's `default_model` is used instead.
+- **model_size_preference** _(deprecated)_: Accepted for backward compatibility with existing Flow Registry v1
+  configs. When set, its value is automatically mapped to `model_tags` (e.g. `model_size_preference: "small"` is
+  equivalent to `model_tags: "small"`). If both `model_tags` and `model_size_preference` are provided, `model_tags`
+  takes precedence. Migrate to `model_tags` for all new flows.
+- **compaction**: Configuration for conversation compaction. Useful when OneOffComponent is used in flows with prior
+  conversation history. See [Conversation Compaction](../context_management/compaction.md) for details.
+- **max_correction_attempts**: Maximum number of retry attempts for failed tool executions (default: 3)
+- **ui_log_events**: UI logging configuration for displaying tool execution progress
+
+#### Internal Architecture
+
+The OneOffComponent consists of three internal nodes:
+
+1. **LLM Node** (`{name}#llm`): Uses `AgentNode` to generate one or more tool calls based on the prompt and inputs
+1. **Tools Node** (`{name}#tools`): Executes all generated tool calls with error correction using
+   `ToolNodeWithErrorCorrection`
+1. **Exit Node** (`{name}#exit`): Handles component completion and state logging
+
+The component uses conditional routing to handle tool execution results:
+
+- **Success**: Routes to exit node when all tool executions complete successfully
+- **Retry**: Returns to LLM node when errors occur and retry attempts remain
+- **Max Attempts**: Routes to exit node when maximum correction attempts are reached
+
+#### Comparison with AgentComponent
+
+The OneOffComponent and AgentComponent differ in their execution patterns:
+
+**OneOffComponent**:
+
+- **Single Round**: Generates tool calls once and executes them all in one round
+- **Task-Focused**: Designed for specific, bounded tasks that can be completed in one execution cycle
+- **No Iterative Reasoning**: Cannot see tool results and decide on additional actions
+- **Simpler Flow**: Linear progression from tool generation → execution → completion
+- **Error Handling**: Built-in retry logic for failed tool executions
+
+**AgentComponent**:
+
+- **Multi-Turn Conversations**: Can generate tools, see results, and decide on next actions
+- **Iterative Decision Making**: Can analyze tool results and generate additional tool calls
+- **Complex Reasoning**: Supports back-and-forth between LLM and tools until task completion
+- **Final Output Control**: Uses `AgentFinalOutput` tool to explicitly signal completion
+- **Conversation Flow**: Maintains ongoing conversation history for context
+
+**When to Use Each**:
+
+- Use **OneOffComponent** for: File operations, data processing, single API calls, or any task that can be completed in
+  one execution round
+- Use **AgentComponent** for: Interactive tasks, complex problem-solving, multi-step workflows requiring decision-making
+  between steps
+
+#### Outputs
+
+Each OneOffComponent automatically produces:
+
+- **ui_chat_log**: UI logging information for tool execution events
+- **conversation_history:{component_name}**: Message history for the component
+- **context:{component_name}.tool_calls**: Record of tool calls made by the component
+- **context:{component_name}.tool_responses**: Record of tool responses received
+- **context:{component_name}.execution_result**: Execution result ("success" or "failed")
+
+#### UI Log Events
+
+The OneOffComponent supports the following UI log events from `UILogEventsOneOff` that can be specified in the
+`ui_log_events` configuration:
+
+- **on_tool_call_input**: Logged when a tool is about to be called with its input arguments
+- **on_tool_execution_success**: Logged when a tool executes successfully
+- **on_tool_execution_failed**: Logged when a tool execution fails
+- **on_agent_reasoning**: Logged when agent can not produce tool calls because of technical/tool limitations
+
+#### Complete OneOffComponent Example
+
+```yaml
+components:
+    - name: "file_reader"
+      type: OneOffComponent
+      prompt_id: "read_specific_file"
+      prompt_version: "^1.0.0"
+      inputs:
+          - from: "context:goal"
+            as: "target_file"
+      toolset:
+          - "read_file"
+      max_correction_attempts: 2
+      ui_log_events:
+          - "on_tool_call_input"
+          - "on_tool_execution_success"
+          - "on_tool_execution_failed"
+```
+
+#### Usage Patterns
+
+**Single File Operation**: Use OneOffComponent for singular file operations:
+
+```yaml
+components:
+    - name: "config_updater"
+      type: OneOffComponent
+      prompt_id: "update_config_file"
+      prompt_version: "^1.0.0"
+      inputs:
+          - "context:goal"
+      toolset:
+          - "edit_file"
+      max_correction_attempts: 3
+```
+
+**Conditional Tool Execution**: Only proceeds when tool call was a success:
+
+```yaml
+routers:
+    - from: "file_processor"
+      condition:
+          input: "context:file_processor.execution_result"
+          routes:
+              "success": "next_step"
+              "failed": "error_handler"
+```
+
+**Error Handling Integration**: Combine with other components for robust workflows:
+
+```yaml
+components:
+    - name: "backup_creator"
+      type: OneOffComponent
+      prompt_id: "create_backup"
+      prompt_version: "^1.0.0"
+      toolset: [ "create_file_with_contents" ]
+      max_correction_attempts: 5
+
+    - name: "error_reporter"
+      type: AgentComponent
+      prompt_id: "report_errors"
+      prompt_version: "^1.0.0"
+      inputs:
+          - from: "context:backup_creator.tool_responses"
+            as: "execution_results"
+      toolset: [ "create_issue" ]
+
+routers:
+    - from: "backup_creator"
+      condition:
+          input: "context:backup_creator.execution_result"
+          routes:
+              "success": "next_step"
+              "failed": "error_reporter"
+    - from: "error_reporter"
+      to: "end"  # Always end after error reporting
+```
+
+### HumanInputComponent
+
+The HumanInputComponent enables human-in-the-loop interactions within flows by requesting and processing user input
+during workflow execution.
+This component allows workflows to pause execution, request user feedback or decisions, and then continue based on the
+user's response.
+
+The component provides these capabilities:
+
+- **Request user input**: Display optional prompts to guide user responses
+- **Interrupt workflow execution**: Cleanly pause the workflow until user input is received
+- **Process different response types**: Handle text responses, approval/rejection decisions
+- **Route responses**: Direct user input to specified target components in the conversation history
+- **Store approval decisions**: Capture user approval/rejection decisions in the flow context
+
+#### Required Parameters
+
+- **name**: Unique identifier for this component instance. Must not contain `:` or `.` characters.
+- **type**: Must be `"HumanInputComponent"`
+- **sends_response_to**: Name of the target component that should receive the user's response in conversation history
+- **message_template**: Jinja2 template string to display to the user as a prompt. Variables can be injected via the `inputs` parameter.
+
+#### Optional Parameters
+
+- **inputs**: List of input data sources for message template rendering (default: empty list)
+- **interaction_type**: Type of user interaction expected - `"approval"` (default) for approval/rejection decisions, `"input"` for text-based responses, or `"external"` when the reply is collected outside the GitLab flow session page (for example, replies posted on a linked work item). This affects the UI rendering in GitLab; it does not change how the component waits for or processes a resume - an `"external"` pause is still unblocked by the same events as `"input"`. The session page renders no reply control for `"external"`, so the flow needs another way to resume the session.
+
+#### Implicit Default Inputs
+
+- **cancelled_turn** (reads `context:inputs.cancelled_turn`, optional): The cancelled-turn context envelope written by the engine when a stopped session is resumed via stop-recovery rollback. When present, the component prepends a transcript of the cancelled exchange to the user's message (between `<cancelled-turn>` meta tags) before forwarding it to the target component, then clears the value so it is consumed exactly once. The UI chat log always shows the clean user message. Flow authors can override the source path by declaring an input whose template variable name is `cancelled_turn` (the latest declaration wins):
+
+```yaml
+inputs:
+    - from: "context:my_custom.discarded_messages"
+      as: "cancelled_turn"
+```
+
+#### Outputs
+
+Each HumanInputComponent automatically produces:
+
+- **conversation_history:{sends_response_to}**: User messages directed to the target component
+- **context:{component_name}.approval**: User approval decision (`"approve"` or `"reject"`)
+- **context:inputs.cancelled_turn**: Cleared (set to `null`) after the cancelled-turn context is consumed
+
+#### UI Log Events
+
+The HumanInputComponent produces following UI log events:
+
+- **on_user_input_prompt**: Logged when displaying a prompt to request user input. This shows the prompt content in the UI to guide the user's response. The log entry includes the `interaction_type` (`approval`, `input`, or `external`) in the `message_sub_type` field, which GitLab uses to determine whether to render approval buttons, a text input field, or no reply control at all.
+- **on_user_response**: Logged when the user provides a response (RESPONSE, REJECT, or MODIFY events). This captures the user's feedback in the UI chat log.
+
+#### Complete HumanInputComponent Example
+
+```yaml
+components:
+    - name: "user_approval"
+      type: HumanInputComponent
+      sends_response_to: "code_assistant"
+      interaction_type: "approval"  # Request approval/rejection (default)
+      message_template: "The code assistant has proposed the following changes: {{ proposed_changes }}. Do you approve?"
+      inputs:
+          - from: "context:code_assistant.final_answer"
+            as: "proposed_changes"
+
+    - name: "code_assistant"
+      type: AgentComponent
+      prompt_id: "code_review_helper"
+      prompt_version: "^1.0.0"
+      inputs:
+          - "context:goal"
+          - from: "context:user_approval.approval"
+            as: "user_decision"
+      toolset: [ "read_file", "edit_file" ]
+```
+
+#### Usage Patterns
+
+**Approval Workflow**: Use HumanInputComponent with `interaction_type: "approval"` to request user approval before proceeding with actions:
+
+```yaml
+components:
+    - name: "user_approval"
+      type: HumanInputComponent
+      sends_response_to: "code_assistant"
+      interaction_type: "approval"
+      message_template: "Please review the proposed changes and approve or reject."
+
+routers:
+    - from: "user_approval"
+      condition:
+          input: "context:user_approval.approval"
+          routes:
+              "approve": "execute_changes"
+              "reject": "revise_proposal"
+              "default_route": "manual_review"
+```
+
+**Interactive Chat**: Use HumanInputComponent with `interaction_type: "input"` to enable back-and-forth conversation between user and agent:
+
+```yaml
+components:
+    - name: "user_input"
+      type: HumanInputComponent
+      sends_response_to: "chat_agent"
+      interaction_type: "input"
+      message_template: "How can I help you today?"
+
+routers:
+    - from: "user_input"
+      to: "chat_agent"
+    - from: "chat_agent"
+      to: "user_input"  # Loop back for continued interaction
+```
+
+**Conditional Input**: Request user input only when certain conditions are met:
+
+```yaml
+routers:
+    - from: "analyzer"
+      condition:
+          input: "context:analyzer.confidence"
+          routes:
+              "low": "user_clarification"
+              "high": "auto_processor"
+```
+
+### EndComponent
+
+The `EndComponent` is a built-in component that terminates a workflow with a successful completion status. Every flow automatically includes an `EndComponent` named `"end"` that can be referenced in routers without explicit configuration.
+
+When a workflow reaches the `EndComponent`, it:
+
+- Sets the workflow status to `COMPLETED`
+- Terminates the workflow execution
+- Signals successful completion to the system
+
+#### Usage
+
+The `EndComponent` is automatically available in all flows and does not need to be defined in the `components` section. Reference it in routers using the name `"end"`:
+
+```yaml
+routers:
+  - from: "my_component"
+    to: "end"  # Routes to the built-in EndComponent
+```
+
+#### When to Use EndComponent
+
+Use `EndComponent` (route to `"end"`) when:
+
+- The workflow has completed successfully
+- All required tasks have been executed
+- The workflow should terminate with a `COMPLETED` status
+
+#### Complete EndComponent Example
+
+```yaml
+version: "v1"
+environment: ambient
+
+components:
+    - name: "task_executor"
+      type: AgentComponent
+      prompt_id: "execute_task"
+      prompt_version: "^1.0.0"
+      inputs: ["context:goal"]
+      toolset: ["read_file", "create_file_with_contents"]
+
+routers:
+    - from: "task_executor"
+      to: "end"  # Workflow completes successfully
+
+flow:
+    entry_point: "task_executor"
+```
+
+### AbortComponent
+
+The `AbortComponent` is a built-in component that terminates a workflow with an error status. Every flow automatically includes an `AbortComponent` named `"abort"` that can be referenced in routers without explicit configuration.
+
+When a workflow reaches the `AbortComponent`, it:
+
+- Sets the workflow status to `ERROR`
+- Terminates the workflow execution
+- Signals that the workflow encountered an unrecoverable error
+
+#### Usage
+
+The `AbortComponent` is automatically available in all flows and does not need to be defined in the `components` section. Reference it in routers using the name `"abort"`:
+
+```yaml
+routers:
+  - from: "my_component"
+    to: "abort"  # Routes to the built-in AbortComponent
+```
+
+#### When to Use AbortComponent
+
+Use `AbortComponent` (route to `"abort"`) when:
+
+- The workflow encounters an unrecoverable error
+- Required preconditions are not met (e.g., missing credentials, invalid configuration)
+- A component fails after exhausting all retry attempts
+- The workflow should terminate with an `ERROR` status to indicate failure
+
+The most common use of `AbortComponent` is with conditional routers to handle validation failures or error conditions.
+
+#### Complete AbortComponent Example
+
+```yaml
+version: "v1"
+environment: ambient
+
+components:
+    - name: "validator"
+      type: AgentComponent
+      prompt_id: "validate_input"
+      prompt_version: "^1.0.0"
+      inputs: ["context:goal"]
+      toolset: []
+
+    - name: "processor"
+      type: AgentComponent
+      prompt_id: "process_data"
+      prompt_version: "^1.0.0"
+      inputs: ["context:goal"]
+      toolset: ["read_file", "edit_file"]
+
+routers:
+    - from: "validator"
+      condition:
+          input: "context:validator.final_answer"
+          routes:
+              "valid": "processor"
+              "invalid": "abort"  # Abort on validation failure
+    - from: "processor"
+      to: "end"
+
+flow:
+    entry_point: "validator"
+```
+
+#### EndComponent vs AbortComponent
+
+The key difference between `EndComponent` and `AbortComponent` is the workflow status they set:
+
+| Component        | Status      | Use Case                                    |
+|------------------|-------------|---------------------------------------------|
+| `EndComponent`   | `COMPLETED` | Workflow finished successfully              |
+| `AbortComponent` | `ERROR`     | Workflow encountered an unrecoverable error |
+
+Choose the appropriate component based on whether the workflow completed its intended task successfully (`end`) or failed due to an error (`abort`).
+
+## Catalog Items
+
+A **catalog item** is something a flow can pull in from outside its own configuration: defined elsewhere, sent with a
+run, and built into the flow at run time. Flows shipped in this repository are otherwise fixed at build time, so
+catalog items are the one way their shape depends on the request.
+
+A flow lists what it accepts in a top-level `include` section. Each entry addresses items with four fields:
+
+| Field       | Purpose                                                                        |
+|-------------|--------------------------------------------------------------------------------|
+| `source`    | Where the items come from, for example `workspace`                               |
+| `item_type` | What kind of item, for example `agent_template`                                  |
+| `item_id`   | Which items, in whatever form the source addresses them                          |
+| `version`   | Which version to use, only meaningful for a source that versions its items       |
+
+Each `source` and `item_type` combination is served by its own implementation, which decides what a valid reference
+looks like and what the flow's components become once its items are bound. A reference to an unsupported combination
+is rejected with a message naming what does work. Two combinations are accepted currently:
+
+- `workspace` / `agent_template`, described below.
+- `ai-catalog` / `agent`: an agent published to the AI Catalog, addressed by `item_id` with a required `version`.
+  GitLab resolves the agent when the flow starts. The service only validates the reference. Nothing is attached yet.
+  Binding removes the entry from the claiming component and the flow builds as authored. Attaching the resolved
+  agents is tracked in
+  [ai-assist#2870](https://gitlab.com/gitlab-org/modelops/applied-ml/code-suggestions/ai-assist/-/work_items/2870).
+
+Two rules hold whatever the source:
+
+- Only one component in a flow may claim an entry. Attaching a sub-agent rewrites its state keys, so two coordinators
+  cannot share the same item. Supporting several coordinators means building one instance of an item per coordinator,
+  which is planned but not implemented yet.
+- A claiming component may claim no more than one entry. Binding serves a single claim and removes every reference
+  from that component, so a second entry would be ignored without an error. Repeating the same entry counts as one
+  claim.
+
+### Including Workspace Agents
+
+**Workspace agents** let a customer define their own specialist agents, send them along with a flow run, and have the
+flow attach them as sub-agents of one of its own components. They are the only kind attached at run time.
+
+The flow author stays in control. A flow receives workspace agents only if it explicitly opts in, and it decides which
+of its components coordinates them.
+
+> **Note:** Attaching workspace agents is gated by the `dap_workspace_agents` feature flag, which GitLab pushes with
+> each request. While the flag is off, a flow that opts in receives no items and builds exactly as authored, so opting
+> in is safe ahead of the rollout.
+
+#### What a Workspace Agent Is
+
+A workspace agent is an **agent template**: a name, a description, a toolset and a prompt. It is not a component. The
+platform builds it into an `AgentComponent` at flow build time, using a component template that the platform owns.
+
+| Field         | Required | Limit          | Purpose                                                             |
+|---------------|----------|----------------|---------------------------------------------------------------------|
+| `name`        | yes      | 64 characters  | Becomes the component name in the graph, namespaced with `workspace/` |
+| `description` | yes      | 1024 characters| What the coordinator sees when choosing a `delegate_task` target      |
+| `toolset`     | no       | -              | Tool names the agent may use; may be empty for an agent that only reasons |
+| `prompt`      | yes      | 10000 characters | The agent's own instructions                                        |
+
+Names are namespaced, so a workspace agent can never take a name a flow author already used. An agent called
+`developer_agent` becomes `workspace/developer_agent` and coexists with the flow's own `developer_agent` component.
+
+#### Where Workspace Agents Are Defined
+
+Workspace agents are defined by the customer in their own workspace, alongside the code the flow will operate on. They
+are not part of this repository and are not part of any flow config here. Nothing about a workspace agent is known
+until a flow run starts.
+
+#### How Workspace Agents Reach a Flow
+
+Workspace agents travel **with the run, not with the flow**. The executor collects them from the customer's workspace
+and sends them on the gRPC start request; Duo Workflow Service validates them and passes them to the flow builder,
+which binds them to the flow's `include` section before any component is constructed.
+
+This means:
+
+- The same flow config produces a different graph for different runs, depending on which agents the request carried.
+- A run that sends no agents builds the flow exactly as authored.
+- Agents sent while the `dap_workspace_agents` feature flag is off are dropped with a log entry, and the run continues
+  as though none were sent.
+- Agents are validated per run. Invalid items fail that run and no other.
+
+#### Allowing Workspace Agents in a Flow
+
+Opting in takes two pieces of YAML.
+
+**1. Declare what the flow accepts** in an `include` section, a top-level sibling of `components` and `routers`:
+
+```yaml
+include:
+    - source: workspace
+      item_type: agent_template
+      item_id: "*"
+```
+
+**2. Claim the entry** on the component that should coordinate the agents, by repeating the entry exactly in its
+`subagents` list:
+
+```yaml
+components:
+    - name: "developer_agent"
+      type: AgentComponent
+      prompt_id: "developer_agent_prompt"
+      subagents:
+          - source: workspace
+            item_type: agent_template
+            item_id: "*"
+```
+
+The claim must match the declaration field for field. A component that claims something the flow does not declare is a
+configuration error, so a flow cannot pull in items it never advertised.
+
+Nothing else is needed. The prompt each included agent is built against ships with the service, and the agent's own
+prompt reaches it as a value rather than as template source, so customer text is data and not code. Overriding that
+prompt per flow is a later phase.
+
+#### Why `item_id` Is `*`
+
+Workspace agents are not addressed individually. The platform holds **one component template**, and clones it once per
+agent the request carried, up to a per-request ceiling of 10 agents. There is no configuration to write per agent and
+no ID for a flow to reference, so the flow declares the whole set at once with `*`.
+
+Today `*` means **every workspace agent the request carried is attached to the coordinating component**.
+
+The four fields exist so this can become more selective later without changing the syntax. Likely extensions are
+matching on a name prefix or suffix, so a flow could take only the agents intended for it:
+
+```yaml
+# Illustrative only. Not supported today.
+include:
+    - source: workspace
+      item_type: agent_template
+      item_id: "review-*"
+```
+
+Until such selectors exist, `*` is the only accepted `item_id` for this source, and any other value is rejected.
+
+#### What Binding Produces
+
+Binding runs before components are constructed, and what it produces depends entirely on how many agents the request
+carried:
+
+| Agents in the request | Coordinating component                                              | Extra components         |
+|-----------------------|---------------------------------------------------------------------|--------------------------|
+| none                  | Builds as authored: a plain `AgentComponent`, no delegation           | none                     |
+| one or more           | Promoted to [supervisor mode](#supervisor-mode) over the agents       | one per agent            |
+
+The coordinator also receives a `has_workspace_agents` input, so its prompt can gate delegation guidance behind
+`{% if has_workspace_agents %}` and read identically for runs that carry no agents. The Duo Developer flows do not
+use it: they rely on the `delegate_task` tool, whose description is injected with the tool for the model and lists
+each subagent's name and description together with the rules for delegating.
+
+Statically named `subagents` entries are preserved. A component can supervise its own in-flow sub-agents and workspace
+agents at the same time.
+
+#### Constraints
+
+Beyond the two rules that hold for every source, one constraint is specific to this kind: `item_id` must be `*`, and
+no `version` may be declared. Workspace agents arrive whole with the request, so there is nothing to resolve by ID or
+version.
+
+## Flow Examples
+
+### Simple ambient code review flow
+
+```yaml
+version: "v1"
+environment: ambient
+
+components:
+    - name: "code_analyzer"
+      type: AgentComponent
+      prompt_id: "code_review_prompt"
+      # prompt_version omitted - uses local prompt
+      ui_log_events: ["on_agent_final_answer"]
+      inputs:
+        - from: context:goal
+          as: mr_link
+      toolset: ["read_file", "list_dir"]
+
+prompts:
+    - prompt_id: "my_local_prompt"
+      prompt_template:
+          system: "You are a experience software developer, your role is to conduct through code review and mentor other engineers on best practices and patterns."
+          user: "Please conduct code review for merge request at: {{mr_link}}"
+      params:
+          timeout: 180
+
+routers:
+    - from: "code_analyzer"
+      to: "end"
+
+flow:
+    entry_point: "code_analyzer"
+```
+
+### Ambient flow with tool options for controlled tool behavior
+
+```yaml
+version: "v1"
+environment: ambient
+
+components:
+    - name: "security_agent"
+      type: AgentComponent
+      prompt_id: "security_prompt"
+      inputs:
+          - from: "context:project_id"
+            as: "project_id"
+          - from: "context:goal"
+            as: mr_link
+      toolset:
+          - "create_merge_request_note":
+              "internal": true
+          - "get_merge_request"
+      ui_log_events:
+          - "on_tool_execution_success"
+          - "on_tool_execution_failed"
+          - "on_agent_final_answer"
+
+    - name: "general_agent"
+      type: AgentComponent
+      prompt_id: "general_prompt"
+      inputs:
+          - from: "context:project_id"
+            as: "project_id"
+          - from: "context:goal"
+            as: mr_link
+      toolset:
+          - "create_merge_request_note"
+      ui_log_events:
+          - "on_tool_execution_success"
+          - "on_tool_execution_failed"
+          - "on_agent_final_answer"
+
+prompts:
+    - prompt_id: "security_prompt"
+      name: "Security Analysis Prompt"
+      unit_primitives:
+          - duo_agent_platform
+      prompt_template:
+          system: |
+              You are a security analyst. Review the MR and leave an internal note
+              summarizing any security concerns.
+          user: |
+              Project ID: {{project_id}}
+              Merge Request Link: {{mr_link}}
+      params:
+          timeout: 180
+
+    - prompt_id: "general_prompt"
+      name: "General Summary Prompt"
+      unit_primitives:
+          - duo_agent_platform
+      prompt_template:
+          system: |
+              You are a helpful assistant. Leave a public note on the MR
+              summarizing the changes.
+          user: |
+              Project ID: {{project_id}}
+              Merge Request Link: {{mr_link}}
+      params:
+          timeout: 180
+
+routers:
+    - from: "security_agent"
+      to: "general_agent"
+    - from: "general_agent"
+      to: "end"
+
+flow:
+    entry_point: "security_agent"
+```
+
+### Chat-partial flow for conversational code review foundational agent
+
+```yaml
+version: "v1"
+environment: chat-partial
+
+components:  # Exactly 1 component may be present in components section, and it must be of type AgentComponent
+    - name: "code_analyzer"
+      type: AgentComponent
+      prompt_id: "code_review_prompt"
+      # prompt_version omitted - uses local prompt
+      ui_log_events: ["on_agent_final_answer"]
+      inputs:
+        - from: context:goal
+          as: mr_link
+      toolset: ["read_file", "list_dir"]
+
+prompts:
+    - prompt_id: "my_local_prompt"
+      prompt_template:
+          system: "You are a experience software developer, your role is to conduct through code review and mentor other engineers on best practices and patterns."
+          user: "Please conduct code review for merge request at: {{mr_link}}"
+      params:
+          timeout: 180
+
+routers: []
+flow: {}
+```
+
+### Flow with model tags
+
+This example demonstrates how to route different tasks to different models using tags for cost and performance optimisation.
+A lightweight `"small"` model handles codebase exploration, while a more capable `"large"` model performs the actual
+implementation. Both fall back to the feature's `default_model` if the requested tag is not configured in `models_for_tags`.
+
+```yaml
+version: "v1"
+environment: ambient
+
+components:
+    - name: "explorer"
+      type: AgentComponent
+      description: "Explores the codebase to gather context relevant to the task."
+      prompt_id: "explorer_agent"
+      prompt_version: "^1.0.0"
+      model_tags: ["small"]   # Use a fast, cost-efficient model for exploration
+      inputs: ["context:goal"]
+      toolset:
+          - "read_file"
+          - "list_dir"
+          - "find_files"
+      ui_log_events:
+          - "on_tool_execution_success"
+
+    - name: "implementer"
+      type: AgentComponent
+      description: "Implements the required code changes based on the gathered context."
+      prompt_id: "implementer_agent"
+      prompt_version: "^1.0.0"
+      model_tags: ["large"]   # Use a powerful model for complex code generation
+      inputs:
+          - from: "context:goal"
+            as: "goal"
+          - from: "context:explorer.final_answer"
+            as: "codebase_context"
+      toolset:
+          - "read_file"
+          - "edit_file"
+          - "create_file_with_contents"
+      ui_log_events:
+          - "on_agent_final_answer"
+          - "on_tool_execution_success"
+          - "on_tool_execution_failed"
+
+routers:
+    - from: "explorer"
+      to: "implementer"
+    - from: "implementer"
+      to: "end"
+
+flow:
+    entry_point: "explorer"
+```
+
+### Multi-Agent Supervisor Flow
+
+This example demonstrates a supervisor agent that delegates tasks to specialised sub-agents:
+
+```yaml
+version: "v1"
+environment: ambient
+
+components:
+    - name: "developer"
+      type: AgentComponent
+      description: "Implements code changes, creates and edits files based on requirements."
+      prompt_id: "developer_agent"
+      prompt_version: "^1.0.0"
+      toolset:
+          - "read_file"
+          - "edit_file"
+          - "create_file_with_contents"
+          - "list_dir"
+          - "find_files"
+      ui_log_events:
+          - "on_agent_final_answer"
+          - "on_tool_execution_success"
+
+    - name: "tester"
+      type: AgentComponent
+      description: "Writes and runs automated tests to verify code correctness."
+      prompt_id: "tester_agent"
+      prompt_version: "^1.0.0"
+      toolset:
+          - "read_file"
+          - "create_file_with_contents"
+          - "run_command"
+      ui_log_events:
+          - "on_agent_final_answer"
+          - "on_tool_execution_success"
+
+    - name: "supervisor"
+      type: AgentComponent
+      prompt_id: "supervisor_agent"
+      prompt_version: "^1.0.0"
+      inputs: [ "context:goal" ]
+      subagents:
+          - name: "developer"
+          - name: "tester"
+      max_delegations: 20
+      toolset:
+          - "get_issue"
+      ui_log_events:
+          - "on_agent_final_answer"
+          - "on_tool_execution_success"
+          - "on_tool_execution_failed"
+
+routers:
+    - from: "supervisor"
+      to: "end"
+
+flow:
+    entry_point: "supervisor"
+```

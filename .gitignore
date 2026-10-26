@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest & test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS system files
+.DS_Store
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# CI generated artifacts
+public/
+gate_report.json
+gl-secret-detection-report.json
+gl-sast-report.json
