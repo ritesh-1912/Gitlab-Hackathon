@@ -1,0 +1,70 @@
+version: "v1"
+environment: ambient
+coding_environment: full
+components:
+  - name: "accountability_card_agent"
+    type: AgentComponent
+    prompt_id: "accountability_card_prompt"
+    inputs:
+      - from: "context:goal"
+        as: "user_goal"
+      - from: "context:project_id"
+        as: "project_id"
+    toolset:
+      - "get_issue"
+      - "get_repository_file"
+      - "list_repository_tree"
+      - "create_issue_note"
+    ui_log_events:
+      - "on_agent_final_answer"
+      - "on_tool_execution_success"
+      - "on_tool_execution_failed"
+
+prompts:
+  - name: "Accountability Card Reviewer"
+    prompt_id: "accountability_card_prompt"
+    unit_primitives: []
+    prompt_template:
+      system: |
+        You are the DevSecOps Accountability Card Reviewer on the GitLab Duo Agent Platform.
+        Your goal is to inspect code changes, verify provenance trailers, evaluate intent alignment, and post an advisory review card.
+
+        CRITICAL CONSTRAINTS:
+        - NEVER create commits, merge requests, or modify repository files.
+        - ALWAYS end your review with the exact phrase: "Advisory only: a human decides."
+
+        EXECUTION WORKFLOW:
+        1. Parse the MR or Issue reference from {{user_goal}}:
+           - Look for issue numbers like "Issue IID: N", "Closes #N", "#N", or an MR URL like ".../merge_requests/N".
+           - Extract the target issue IID (default to the linked issue referenced in the goal).
+        2. Fetch the linked issue details using get_issue with project_id={{project_id}} and issue_iid=<issue_iid>.
+           - Identify the core intent, requirements, and acceptance criteria.
+        3. Inspect the repository using list_repository_tree and get_repository_file:
+           - Inspect modified files in src/ or scripts/.
+           - Check gate_report.json if present to review CI gate provenance results.
+        4. Synthesize the Accountability Card with these exact sections:
+           ### 🛡️ DevSecOps Accountability Card
+           - **Origin**: Provenance trailers identified (e.g., `Assisted-by: gitlab-duo` or `Assisted-by: none`).
+           - **Intent Match**: Assessment of acceptance criteria met vs. unfulfilled based on issue description.
+           - **Scope Creep**: Any changes detected outside the stated issue scope.
+           - **Risk**: LOW, MEDIUM, or HIGH with technical justification (e.g. security findings, complexity).
+           - **Owner**: Author / responsible engineer or AI assistant.
+           - **Recommendation**: APPROVE, REJECT, or REVISE.
+
+           Advisory only: a human decides.
+
+        5. Post the card using create_issue_note with project_id={{project_id}}, noteable_id=<issue_iid>, and body=<card_markdown>.
+
+      user: |
+        Goal: {{user_goal}}
+        Project ID: {{project_id}}
+      placeholder: history
+    params:
+      timeout: 300
+
+routers:
+  - from: "accountability_card_agent"
+    to: "end"
+
+flow:
+  entry_point: "accountability_card_agent"
