@@ -12,9 +12,9 @@ Generative AI solved code authoring. Engineering teams now ship code faster than
 When an incident occurs in production, most teams cannot answer:
 1. **Where did this code originate?** (Which developer, AI tool, or agent authored it?)
 2. **What was it intended to do?** (Which requirement or acceptance criteria justified it?)
-3. **Who is responsible?** (Can we trace a failed release back to its prompt origin and immediately remediate?)
+3. **Who is responsible?** (Can we trace a failed release back to its commit and MR origin and immediately remediate?)
 
-**`<PROJECT_NAME>`** closes this gap. It is an end-to-end DevSecOps pipeline and GitLab Duo custom flow suite that makes every change carry cryptographic/metadata provenance (`Assisted-by:` trailers) and explicit intent linkage (`Closes #<id>`), gates merges automatically via CI, maintains a live **Accountability Ledger** on GitLab Pages, and equips Duo agents to triage intent, evaluate review risk, and trace release incidents back to their source.
+**`<PROJECT_NAME>`** closes this gap. It is an end-to-end DevSecOps pipeline and GitLab Duo custom flow suite that makes every change carry metadata provenance (`Assisted-by:` trailers) and explicit intent linkage (`Closes #<id>`), gates merges automatically via CI, maintains a live **Accountability Ledger** on GitLab Pages, and equips Duo agents to triage intent, evaluate review risk, and trace release incidents back to their source.
 
 ---
 
@@ -30,7 +30,7 @@ When an incident occurs in production, most teams cannot answer:
 
 ## 🏛️ Architecture & Lifecycle Coverage
 
-`<PROJECT_NAME>` automates 8 distinct DevSecOps lifecycle stages under **Supervised Autonomy**—agents perform multi-step analysis, but the human retains final authority (*"Advisory only: a human decides"*).
+`<PROJECT_NAME>` automates 7 of GitLab's 9 lifecycle stages (plan, create, verify, secure, release, monitor, govern) plus incident remediation under **Supervised Autonomy**—agents perform multi-step analysis, but the human retains final authority (*"Advisory only: a human decides"*).
 
 ```mermaid
 flowchart TD
@@ -54,8 +54,8 @@ flowchart TD
 
     subgraph MonitorRemediate["4. Monitor & Remediate"]
         DeployJob --> SmokeJob["staging-healthcheck<br/>(In-process smoke test)"]
-        SmokeJob -->|"On Failure"| IncIssue["Incident Issue"]
-        IncIssue -->|"@incident-trace mention"| Flow3["Flow 3: Incident Trace<br/>(Traces MR, prompt origin, outputs git revert)"]
+        SmokeJob -->|"Failure reported"| IncIssue["Incident issue opened by a human from the template"]
+        IncIssue -->|"@incident-trace mention"| Flow3["Flow 3: Incident Trace<br/>(Traces culprit SHA, MR, and outputs git revert)"]
     end
 ```
 
@@ -63,14 +63,14 @@ flowchart TD
 
 | Lifecycle Stage | Implementation in `<PROJECT_NAME>` | Duo Agent Platform Role |
 | :--- | :--- | :--- |
-| **Plan** | Flow 1: Intent Definition | Agent generates acceptance criteria, checklists, and out-of-scope boundaries on issue creation. |
+| **Plan** | Flow 1: Intent Definition | Agent generates acceptance criteria, checklists, and out-of-scope boundaries on mention. |
 | **Create** | Provenance Trailers & Intent Links | Enforces `Assisted-by: <tool|none>` commit trailers and `Closes #N` MR intent links. |
 | **Verify** | Pytest Suite & Flow 2 Card | Unit tests + Duo Review Card evaluating intent match and scope creep. |
 | **Secure** | GitLab SAST & Secret Detection | Scans merge requests; Gate parses report and halts on exposed credentials. |
 | **Release** | GitLab Pages Deployment | Pipeline registers `staging` environment and publishes the latest build. |
 | **Govern** | Accountability Gate & Ledger | Automated merge gate + static HTML Accountability Ledger published to Pages. |
 | **Monitor** | In-Process Staging Healthcheck | Smoke test verifying `/health` and service endpoints post-deployment. |
-| **Remediate** | Flow 3: Incident Trace | Traces failed releases to culprit commits and outputs exact `git revert` commands. |
+| **Remediate** | Flow 3: Incident Trace | Traces failed releases using incident issue fields (culprit SHA, MR, linked issue) and outputs exact `git revert` commands. |
 
 ---
 
@@ -84,16 +84,10 @@ flowchart TD
 │       └── incident.md            # Telemetry issue template for post-incident triage
 ├── LICENSE                        # MIT License (<YOUR NAME>)
 ├── README.md                      # Complete architecture & setup documentation
-├── DEMO.md                        # Under-3-minute video recording walkthrough script
+├── DEMO.md                        # Step-by-step walkthrough runbook for demo scenarios
 ├── DEVPOST.md                     # Official Devpost submission write-up
-├── VIDEO_SCRIPT.md                # Word-for-word timed recording script (< 2:45)
 ├── docs/                          # Official GitLab Duo Flow specs & schemas (saved locally)
-│   ├── README.md                  # Index of references and authoring rules
-│   ├── custom_flows_schema.md     # Flow Registry v1 schema
-│   ├── custom_flows.md            # Execution mechanics
-│   ├── triggers.md                # Triggers documentation
-│   ├── flow_registry_v1_spec.md   # Raw Flow Registry v1 specification
-│   └── official_example_flow.md   # GitLab multi-agent flow blog post & sample
+│   └── README.md                  # Index of official URLs and Flow Registry v1 ambient rules
 ├── flows/                         # GitLab Duo Custom Flows (v1 Ambient Schema)
 │   ├── tracer-bullet.yml          # Minimal 15-line flow to verify trigger & issue note
 │   ├── intent.yml                 # Flow 1: Intent, acceptance criteria & out-of-scope list
@@ -124,8 +118,11 @@ flowchart TD
 ### 2. Local Installation
 ```bash
 # Clone the repository
-git clone https://github.com/ritesh-1912/Gitlab-Hackathon.git
-cd Gitlab-Hackathon
+git clone <GITLAB_PROJECT_URL>
+cd <PROJECT_NAME>
+
+# Configure gitlab remote for demo branches (demo branches are pushed to GitLab only)
+git remote add gitlab <GITLAB_PROJECT_URL>
 
 # Install test dependencies
 pip install -r src/requirements.txt
@@ -161,7 +158,7 @@ python3 scripts/smoke_test.py --fail-on-purpose
    - Ensure Pages access is set to **Everyone** so the public Accountability Ledger is accessible.
 
 ### 2. Register GitLab Duo Custom Flows
-In GitLab, navigate to **Automate > AI Agents & Flows** (or **Settings > GitLab Duo > Flows**):
+In GitLab, open the project's Flows page (under the AI or Automate menu, depending on GitLab version), then New flow:
 1. **Tracer Bullet** (`flows/tracer-bullet.yml`): Register and add **Mention** trigger.
 2. **Intent Flow** (`flows/intent.yml`): Register as `intent-agent` and add **Mention** trigger.
 3. **Accountability Card** (`flows/accountability-card.yml`): Register as `accountability-card` and add **Mention** trigger.
@@ -169,36 +166,36 @@ In GitLab, navigate to **Automate > AI Agents & Flows** (or **Settings > GitLab 
 
 ---
 
-## 🎬 Running Demo Scenarios
+## Running Demo Scenarios
 
-Run the seeding script to prepare the three demo branches locally:
+Demo branches are pushed to GitLab only. Run the seeding script to prepare the three demo branches locally:
 ```bash
 ./scripts/seed_demo.sh
 ```
 
 ### Scenario A: Clean Feature MR (Passes & Deploys)
-1. Push branch: `git push -u origin demo/scenario-a-clean`.
+1. Push branch: `git push -u gitlab demo/scenario-a-clean`.
 2. Open MR with description: `Implements inventory summary endpoint. Closes #1`.
 3. Mention `@accountability-card` in the MR comment.
-4. **Result**: All tests pass, Accountability Gate passes, Review Card recommends `APPROVE`. Merging deploys to staging and records a verified row on the Pages Accountability Ledger.
+4. **Expected result (to be confirmed after the first run)**: All tests pass, Accountability Gate passes, Review Card recommends `APPROVE`. Merging deploys to staging and appends a verified entry to the Pages Accountability Ledger.
 
 ### Scenario B: Unvetted AI Code (Gate & Secret Catch)
-1. Push branch: `git push -u origin demo/scenario-b-bad-gate`.
+1. Push branch: `git push -u gitlab demo/scenario-b-bad-gate`.
 2. Open MR with description: `Adds admin tool without linked issue.`
-3. **Result**:
+3. **Expected result (to be confirmed after the first run)**:
    - `accountability-gate` fails the pipeline due to a missing `Assisted-by:` trailer.
-   - GitLab Secret Detection flags the dummy AWS key (`AKIAIOSFODNN7EXAMPLE`).
+   - GitLab Secret Detection flags the fake AWS key (`AKIAZ7QX3PLM9RTK2VNB`, commented as FAKE and existing only on this branch).
    - Accountability Card highlights scope creep (`unrelated_admin_tool.py`), rates risk as **HIGH**, and recommends **REJECT**.
 
 ### Scenario C: Post-Deploy Incident & Root Cause Trace
-1. Push branch: `git push -u origin demo/scenario-c-bad-healthcheck` and merge to `main`.
+1. Push branch: `git push -u gitlab demo/scenario-c-bad-healthcheck` and merge to `main`.
 2. Staging deploy runs, but `staging-healthcheck` fails on `GET /health` (`HTTP 500`).
-3. Open an issue using `.gitlab/issue_templates/incident.md`.
-4. Mention `@incident-trace`: Flow 3 isolates the culprit commit, traces it back to the original MR and prompt provenance, and outputs:
+3. Incident issue opened by a human from the template (`.gitlab/issue_templates/incident.md`).
+4. Mention `@incident-trace`: Flow 3 traces using the incident issue's fields (culprit SHA, MR, linked issue) and available tools, and outputs:
    ```bash
-   git revert <culprit_sha> --no-edit && git push origin main
+   git revert <culprit_sha> --no-edit && git push gitlab main
    ```
-5. Execute the revert command to restore staging health immediately.
+5. **Expected result (to be confirmed after the first run)**: Executing the revert command restores staging health immediately on the subsequent pipeline run.
 
 ---
 

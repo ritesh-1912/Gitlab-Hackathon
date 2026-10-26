@@ -6,7 +6,7 @@
 **Hard Submission Deadline**: Oct 27, 2026, 6:30 pm IST (1:00 pm UTC)  
 **Strict Project Schedule**:
 - **Code Freeze**: 3:30 pm IST (Oct 27)
-- **Video Recording & Editing**: 3:30 pm – 5:00 pm IST (Oct 27)
+- **Demo Verification & Walkthrough**: 3:30 pm – 5:00 pm IST (Oct 27)
 - **Devpost Submission**: 5:30 pm IST (Oct 27) — *1-hour safety buffer before the 6:30 pm IST hard deadline*
 
 ---
@@ -28,7 +28,7 @@
   2. *Runs 2–3 (Optional)*: Flow 1 (Intent) prompt validation.
   3. *Runs 4–6 (Optional)*: Flow 2 (Accountability Card) MR review iterations.
   4. *Runs 7–8 (Optional)*: Flow 3 (Incident Trace) validation on incident issue.
-  5. *Runs 9–12 (As needed)*: Final demo walkthrough recording.
+  5. *Runs 9–12 (As needed)*: Final demo walkthrough execution.
 
 ---
 
@@ -39,13 +39,8 @@
 ├── .gitlab-ci.yml                 # Stages: test -> security -> gate -> deploy -> healthcheck
 ├── LICENSE                        # MIT License
 ├── README.md                      # Architecture, setup steps, lifecycle mapping, limitations
-├── docs/                          # Official GitLab reference docs (saved locally)
-│   ├── README.md                  # Index of references and authoring rules
-│   ├── custom_flows_schema.md     # YAML schema & restricted fields
-│   ├── custom_flows.md            # Execution mechanics & settings
-│   ├── triggers.md                # Event triggers (mention, assign, MR, pipeline)
-│   ├── flow_registry_v1_spec.md   # Official Flow Registry v1 specification
-│   └── official_example_flow.md   # Official GitLab multi-agent flow example & blog post
+├── docs/                          # Official GitLab reference docs
+│   └── README.md                  # Index of official URLs and Flow Registry v1 ambient rules
 ├── flows/                         # GitLab Duo Custom Flows (Registry v1 ambient schema)
 │   ├── tracer-bullet.yml          # Minimal 15-line flow to verify mention trigger & issue note
 │   ├── intent-flow.yml            # Flow 1: Intent & Acceptance Criteria (Issue mention)
@@ -131,9 +126,9 @@
 | **T5** | **Duo Custom Flows (Flows 1, 2, 3)** | Author `flows/intent-flow.yml`, `flows/accountability-card.yml`, and `flows/incident-trace.yml`. | 60 min | 10:00 pm (Day 1) |
 | **T6** | **GitLab UI Setup & Repo Push** | Create project, set merge commit strategy, configure Pages, register flows in UI, push to `main`. | 45 min | 10:45 pm (Day 1) |
 | **T7** | **Demo Scenarios Execution** | Seed & run Scenario A (clean pass), Scenario B (gate & secret caught), Scenario C (broken healthcheck + trace + built-in Fix flow). | 60 min | 11:45 pm (Day 1) |
-| **T8** | **Documentation, License & Devpost** | Author `README.md`, `LICENSE`, `docs/DEVPOST_SUBMISSION.md`, and `docs/VIDEO_SCRIPT.md`. | 45 min | 12:30 am (Day 2) |
-| **T9** | **Buffer / Review Sleep Window** | Verification buffer before morning video production. | 60 min | — |
-| **T10** | **Video Recording & Devpost Submission** | Record `< 3 min` video, upload, and submit prior to 5:30 pm IST deadline. | 90 min | **5:00 pm (Day 2)** |
+| **T8** | **Documentation, License & Devpost** | Author `README.md`, `LICENSE`, `DEMO.md`, and `DEVPOST.md`. | 45 min | 12:30 am (Day 2) |
+| **T9** | **Buffer / Review Sleep Window** | Verification buffer before final walkthrough. | 60 min | — |
+| **T10** | **Demo Walkthrough & Submission** | Execute walkthrough scenarios, verify pipeline, and submit prior to 5:30 pm IST deadline. | 90 min | **5:00 pm (Day 2)** |
 
 ---
 
@@ -159,7 +154,7 @@
 
 ### CUT-IF-LATE (Drop Immediately if Behind Schedule)
 *   *Flow 3 pipeline-event trigger*: Drop feature-flagged pipeline trigger; rely exclusively on comment mention (`@<flow> trace`).
-*   *Live execution of Scenario B & C during recording*: Use pre-executed pipeline history and show diffs/logs directly.
+*   *Live execution of Scenario B & C*: Use pre-executed pipeline history and show diffs/logs directly.
 *   *Ledger CSS styling*: Keep plain HTML table with minimal inline styles.
 
 ---
@@ -288,9 +283,9 @@ PROMPT 9: Create Demo Scenarios & Seeding Automation.
 Files to create:
 1. scripts/seed_demo.sh: Shell script that automates setting up git branches and commit trailers for:
    - Scenario A (Clean MR): Clean feature commit with proper trailer and issue link.
-   - Scenario B (Bad MR): Scope creep code, missing trailer, and a fake dummy secret (e.g., FAKE_API_KEY_DO_NOT_USE="AKIAIOSFODNN7EXAMPLE").
+   - Scenario B (Bad MR): Scope creep code, missing trailer, and a fake dummy secret (e.g., FAKE_DEMO_AWS_KEY="AKIAZ7QX3PLM9RTK2VNB").
    - Scenario C (Incident): Commit that breaks /health logic, triggering healthcheck failure, followed by Flow 3 trace and GitLab's built-in "Fix CI/CD Pipeline" flow.
-2. docs/DEMO_WALKTHROUGH.md: Step-by-step instructions for executing the 3-minute hackathon demo live or recorded.
+2. DEMO.md: Plain step-by-step runbook for Scenarios A, B, and C.
 ```
 
 ### Prompt 10: Documentation, Licensing & Devpost Submission Pack
@@ -299,8 +294,7 @@ PROMPT 10: Complete Repository Documentation & Devpost Submission Pack.
 Files to create:
 1. LICENSE: Standard MIT License.
 2. README.md: Architecture diagram, lifecycle stages covered, setup instructions, honest limitation disclaimer (cannot detect AI origin in legacy commits without provenance trailers), and instructions for running the flows.
-3. docs/DEVPOST_SUBMISSION.md: Devpost summary, inspiration, what it does, how we built it, challenges, accomplishments, and what's next.
-4. docs/VIDEO_SCRIPT.md: Minute-by-minute script (<180 seconds) tailored for the demo video recording.
+3. DEVPOST.md: Devpost summary, inspiration, what it does, how we built it, challenges, accomplishments, and what's next.
 ```
 
 ---
@@ -324,8 +318,8 @@ Files to create:
    * Register Flow 2: Paste `flows/accountability-card.yml`, enable `mention` trigger.
    * Register Flow 3: Paste `flows/incident-trace.yml`, enable `mention` trigger.
 5. **Push Codebase**:
-   * Set remote: `git remote add origin <GITLAB_PROJECT_URL>`.
-   * Push initial branch: `git push -u origin main`.
+   * Set remote: `git remote add gitlab <GITLAB_PROJECT_URL>`.
+   * Push initial branch to GitLab: `git push -u gitlab main`.
 6. **Verify Initial Pipeline & Tracer**:
    * Confirm the pipeline on `main` passes and deploys the initial Accountability Ledger.
    * Test Tracer Bullet on an issue with `@<flow>` to verify credit expenditure and response.

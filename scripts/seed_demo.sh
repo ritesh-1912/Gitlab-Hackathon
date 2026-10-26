@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # scripts/seed_demo.sh
-# Prepares 3 local Git branches for GitLab Transcend Hackathon live/recorded demo.
-# Note: Pushes NOTHING automatically. Prints manual push and MR steps.
+# Prepares 3 local Git branches for GitLab Transcend Hackathon demo scenarios.
+# Note: Pushes NOTHING automatically. Demo branches are pushed to GitLab only.
 # ==============================================================================
 
 set -euo pipefail
@@ -79,15 +79,15 @@ git checkout main
 git branch -D demo/scenario-b-bad-gate 2>/dev/null || true
 git checkout -b demo/scenario-b-bad-gate main
 
-# Add fake secret to src/app.py (strictly for Secret Detection demo, never merged)
+# Add fake secret to src/app.py (strictly for Secret Detection demo, exists only on this branch and is never merged)
 python3 -c '
 with open("src/app.py", "r") as f:
     code = f.read()
 
-# AWS Access Key pattern matching Gitleaks / GitLab Secret Detection regex
 secret_code = """
 # FAKE DUMMY CREDENTIAL FOR SECRET DETECTION VERIFICATION ONLY - DO NOT USE
-FAKE_DEMO_AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
+# Exists strictly on demo/scenario-b-bad-gate branch for testing
+FAKE_DEMO_AWS_KEY = "AKIAZ7QX3PLM9RTK2VNB"
 """
 
 if "FAKE_DEMO_AWS_KEY" not in code:
@@ -156,26 +156,25 @@ echo ""
 echo "===================================================================="
 echo "          DEMO BRANCHES READY FOR PUSH (MANUAL STEPS)               "
 echo "===================================================================="
-echo ""
-echo "When ready to record or present, execute the following commands:"
+echo "Note: Demo branches are pushed to GitLab only (<GITLAB_PROJECT_URL>)."
 echo ""
 echo "1. SCENARIO A (Clean Pass):"
-echo "   git push -u origin demo/scenario-a-clean"
+echo "   git push -u gitlab demo/scenario-a-clean"
 echo "   Create MR on GitLab: 'feat: add inventory summary endpoint'"
 echo "   MR Description: 'Implements inventory summary endpoint. Closes #1'"
-echo "   Expected Result: Tests pass, Gate passes, Pages Ledger updates."
+echo "   Expected result (to be confirmed after the first run): Tests pass, Gate passes, Pages Ledger updates."
 echo ""
 echo "2. SCENARIO B (Gate & Secret Catch):"
-echo "   git push -u origin demo/scenario-b-bad-gate"
+echo "   git push -u gitlab demo/scenario-b-bad-gate"
 echo "   Create MR on GitLab: 'wip: add admin tool'"
 echo "   MR Description: 'Adds admin tool without linked issue.'"
-echo "   Expected Result: Gate fails (missing trailer), Secret Detection flags fake key."
+echo "   Expected result (to be confirmed after the first run): Gate fails (missing trailer), Secret Detection flags fake key."
 echo "   Accountability Card recommends: REJECT."
 echo ""
 echo "3. SCENARIO C (Incident & Root Cause Trace):"
-echo "   git push -u origin demo/scenario-c-bad-healthcheck"
+echo "   git push -u gitlab demo/scenario-c-bad-healthcheck"
 echo "   Merge into main to trigger deploy."
-echo "   Expected Result: Staging healthcheck fails."
+echo "   Expected result (to be confirmed after the first run): Staging healthcheck fails."
 echo "   Create Incident Issue using .gitlab/issue_templates/incident.md and mention @incident-trace."
 echo "   Flow outputs: 'git revert <sha> --no-edit' to remediate."
 echo "===================================================================="
