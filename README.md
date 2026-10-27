@@ -175,7 +175,7 @@ Demo branches are pushed to GitLab only. Run the seeding script to prepare the t
 
 ### Scenario A: Clean Feature MR (Passes & Deploys)
 1. Push branch: `git push -u gitlab demo/scenario-a-clean`.
-2. Open MR with description: `Implements inventory summary endpoint. Closes #<MY_ISSUE_NUMBER>`.
+2. Open MR with description: `Implements inventory summary endpoint. Closes #<YOUR ISSUE NUMBER>`.
 3. Mention `@<card-flow-handle>` in the MR comment.
 4. **Expected result (to be confirmed after the first run)**: All tests pass, Accountability Gate passes, Review Card recommends `APPROVE`. Merging deploys to staging and appends a verified entry to the Pages Accountability Ledger (`<PAGES_URL>`).
 

@@ -34,7 +34,7 @@ This document provides a step-by-step runbook for demonstrating the three automa
 ## Scenario A: Clean Feature MR (Passes & Deploys)
 
 ### 1. Plan Stage: Define Intent
-1. In GitLab, create Issue #<MY_ISSUE_NUMBER> titled `Add Inventory Summary Endpoint`.
+1. In GitLab, create Issue #<YOUR ISSUE NUMBER> titled `Add Inventory Summary Endpoint`.
 2. Post a comment mentioning `@<intent-flow-handle>`:
    ```text
    @<intent-flow-handle> please define the acceptance criteria and scope boundaries.
@@ -48,15 +48,15 @@ This document provides a step-by-step runbook for demonstrating the three automa
    ```
 2. Open a Merge Request on GitLab:
    - **Title**: `feat: add inventory summary endpoint`
-   - **Description**: `Implements aggregated inventory summary calculation. Closes #<MY_ISSUE_NUMBER>`
+   - **Description**: `Implements aggregated inventory summary calculation. Closes #<YOUR ISSUE NUMBER>`
 3. Observe the pipeline: `test`, `security` (Secret Detection), and `gate` (`accountability-gate`) run.
 
 ### 3. Review Stage: Accountability Card
 1. In the MR comments, mention `@<card-flow-handle>`:
    ```text
-   @<card-flow-handle> please review this MR against issue #<MY_ISSUE_NUMBER>.
+   @<card-flow-handle> please review this MR against issue #<YOUR ISSUE NUMBER>.
    ```
-2. The agent evaluates the provenance trailer (`Assisted-by: gitlab-duo`), intent linkage (`Closes #<MY_ISSUE_NUMBER>`), and diff.
+2. The agent evaluates the provenance trailer (`Assisted-by: gitlab-duo`), intent linkage (`Closes #<YOUR ISSUE NUMBER>`), and diff.
 
 ### 4. Expected result (to be confirmed after the first run)
 - `test` and `gate` jobs pass.

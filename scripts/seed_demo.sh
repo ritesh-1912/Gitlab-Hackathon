@@ -65,7 +65,7 @@ EOF
 git add src/app.py tests/test_app.py
 git commit -m "feat: add inventory summary endpoint
 
-Implements aggregated inventory summary calculation. Closes #<MY_ISSUE_NUMBER>
+Implements aggregated inventory summary calculation. Closes #<YOUR ISSUE NUMBER>
 
 Assisted-by: gitlab-duo"
 
@@ -161,7 +161,7 @@ echo ""
 echo "1. SCENARIO A (Clean Pass):"
 echo "   git push -u gitlab demo/scenario-a-clean"
 echo "   Create MR on GitLab: 'feat: add inventory summary endpoint'"
-echo "   MR Description: 'Implements inventory summary endpoint. Closes #<MY_ISSUE_NUMBER>'"
+echo "   MR Description: 'Implements inventory summary endpoint. Closes #<YOUR ISSUE NUMBER>'"
 echo "   Expected result (to be confirmed after the first run): Tests pass, Gate passes, Pages Ledger updates."
 echo ""
 echo "2. SCENARIO B (Gate & Secret Catch):"
