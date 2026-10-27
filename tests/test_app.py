@@ -60,7 +60,17 @@ def test_add_item_validation_error(client):
     assert res3.status_code == 400
 
 
-def test_ledger_endpoint(client):
-    response = client.get("/ledger")
-    assert response.status_code == 200
-    assert b"Accountability Ledger" in response.data
+def test_ledger_endpoint(tmp_path):
+    from scripts.build_ledger import build_ledger
+    out_dir = tmp_path / "public"
+    build_ledger(
+        output_dir=str(out_dir),
+        gate_report_path=str(tmp_path / "nonexistent.json"),
+        repo_dir=".",
+        project_title="Test Accountability Ledger",
+    )
+    app = create_app({"TESTING": True, "LEDGER_DIR": str(out_dir)})
+    with app.test_client() as test_client:
+        response = test_client.get("/ledger")
+        assert response.status_code == 200
+        assert b"Accountability Ledger" in response.data

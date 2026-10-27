@@ -52,7 +52,16 @@ def create_app(test_config=None):
     def ledger():
         import os
         from flask import send_from_directory
-        public_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "public")
+        public_dir = app.config.get(
+            "LEDGER_DIR",
+            os.environ.get(
+                "LEDGER_DIR",
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "public"),
+            ),
+        )
+        ledger_file = os.path.join(public_dir, "index.html")
+        if not os.path.isfile(ledger_file):
+            return jsonify({"error": "Accountability Ledger not generated yet"}), 404
         return send_from_directory(public_dir, "index.html")
 
     return app
