@@ -58,3 +58,9 @@ def test_add_item_validation_error(client):
     # Missing name
     res3 = client.post("/items", json={"quantity": 10})
     assert res3.status_code == 400
+
+
+def test_ledger_endpoint(client):
+    response = client.get("/ledger")
+    assert response.status_code == 200
+    assert b"Accountability Ledger" in response.data

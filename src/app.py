@@ -48,10 +48,19 @@ def create_app(test_config=None):
         items.append(new_item)
         return jsonify(new_item), 201
 
+    @app.route("/ledger", methods=["GET"])
+    def ledger():
+        import os
+        from flask import send_from_directory
+        public_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "public")
+        return send_from_directory(public_dir, "index.html")
+
     return app
 
 
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    import os
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="0.0.0.0", port=port)
