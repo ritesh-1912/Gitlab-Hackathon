@@ -21,8 +21,12 @@ from scripts.accountability_gate import (
 
 
 def init_git_repo(repo_dir: Path) -> None:
-    """Initializes a local git repository for testing."""
-    subprocess.run(["git", "init"], cwd=str(repo_dir), check=True, capture_output=True)
+    """Initializes a local git repository for testing with explicit branch and identity."""
+    os.environ["GIT_AUTHOR_NAME"] = "Gate Test Runner"
+    os.environ["GIT_AUTHOR_EMAIL"] = "gate@test.local"
+    os.environ["GIT_COMMITTER_NAME"] = "Gate Test Runner"
+    os.environ["GIT_COMMITTER_EMAIL"] = "gate@test.local"
+    subprocess.run(["git", "init", "-b", "main"], cwd=str(repo_dir), check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Gate Test Runner"], cwd=str(repo_dir), check=True)
     subprocess.run(["git", "config", "user.email", "gate@test.local"], cwd=str(repo_dir), check=True)
 
@@ -500,3 +504,77 @@ def test_cli_execution_push_mode(tmp_path: Path):
     assert "ACCOUNTABILITY GATE: PASSED" in res.stdout
     assert "Mode: PUSH" in res.stdout
     assert "Intent Check: NOT_APPLICABLE" in res.stdout
+
+
+def test_baseline_sha_grandfathers_starter_commit(tmp_path: Path):
+    init_git_repo(tmp_path)
+    root_sha = create_commit(tmp_path, "Root commit\n\nAssisted-by: none", "root.txt", "root\n")
+    starter_sha = create_commit(tmp_path, "Initial commit without trailer", "init.txt", "init\n")
+    feature_sha = create_commit(
+        tmp_path, "feat: user feature\n\nAssisted-by: gitlab-duo", "feat.txt", "feat\n"
+    )
+
+    report_path = tmp_path / "gate_report.json"
+    exit_code, report = run_gate(
+        base=root_sha,
+        head=feature_sha,
+        mode="push",
+        baseline_sha=starter_sha,
+        secret_report=str(tmp_path / "gl-secret-detection-report.json"),
+        output_path=str(report_path),
+        repo_dir=str(tmp_path),
+    )
+
+    assert exit_code == 0
+    assert report["gate_status"] == "PASSED"
+    summary = report["summary"]
+    assert summary["grandfathered_commits"] == 1
+    # Check that starter commit is listed as grandfathered
+    starter_entry = next(c for c in report["provenance_check"]["commits"] if c["sha"] == starter_sha)
+    assert starter_entry["grandfathered"] is True
+    assert starter_entry["status"] == "GRANDFATHERED"
+
+
+def test_baseline_sha_fails_unassisted_commit_after_baseline(tmp_path: Path):
+    init_git_repo(tmp_path)
+    starter_sha = create_commit(tmp_path, "Initial commit", "init.txt", "init\n")
+    unassisted_sha = create_commit(tmp_path, "feat: rogue commit without trailer", "rogue.txt", "code\n")
+
+    report_path = tmp_path / "gate_report.json"
+    exit_code, report = run_gate(
+        base="0000000000000000000000000000000000000000",
+        head=unassisted_sha,
+        mode="push",
+        baseline_sha=starter_sha,
+        secret_report=str(tmp_path / "gl-secret-detection-report.json"),
+        output_path=str(report_path),
+        repo_dir=str(tmp_path),
+    )
+
+    assert exit_code == 1
+    assert report["gate_status"] == "FAILED"
+    # Unassisted commit after baseline must cause violation
+    assert any(unassisted_sha[:8] in v for v in report["violations"])
+    # Starter commit must not cause violation
+    assert not any(starter_sha[:8] in v for v in report["violations"])
+
+
+def test_baseline_sha_via_environment_variable(tmp_path: Path, monkeypatch):
+    init_git_repo(tmp_path)
+    starter_sha = create_commit(tmp_path, "Legacy starter commit", "legacy.txt", "legacy\n")
+
+    monkeypatch.setenv("ACCOUNTABILITY_BASELINE_SHA", starter_sha[:7])
+
+    report_path = tmp_path / "gate_report.json"
+    exit_code, report = run_gate(
+        base="0000000000000000000000000000000000000000",
+        head=starter_sha,
+        mode="push",
+        secret_report=str(tmp_path / "gl-secret-detection-report.json"),
+        output_path=str(report_path),
+        repo_dir=str(tmp_path),
+    )
+
+    assert exit_code == 0
+    assert report["gate_status"] == "PASSED"
+    assert report["summary"]["grandfathered_commits"] == 1

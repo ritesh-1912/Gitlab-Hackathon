@@ -13,8 +13,13 @@ from scripts.smoke_test import run_in_process_smoke_test
 
 
 def init_test_git_repo(repo_dir: Path) -> None:
-    """Helper to initialize a git repo with a commit for ledger tests."""
-    subprocess.run(["git", "init"], cwd=str(repo_dir), check=True, capture_output=True)
+    """Helper to initialize a git repo with a commit for ledger tests with explicit branch and identity."""
+    import os
+    os.environ["GIT_AUTHOR_NAME"] = "Ledger Tester"
+    os.environ["GIT_AUTHOR_EMAIL"] = "tester@ledger.local"
+    os.environ["GIT_COMMITTER_NAME"] = "Ledger Tester"
+    os.environ["GIT_COMMITTER_EMAIL"] = "tester@ledger.local"
+    subprocess.run(["git", "init", "-b", "main"], cwd=str(repo_dir), check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Ledger Tester"], cwd=str(repo_dir), check=True)
     subprocess.run(["git", "config", "user.email", "tester@ledger.local"], cwd=str(repo_dir), check=True)
 

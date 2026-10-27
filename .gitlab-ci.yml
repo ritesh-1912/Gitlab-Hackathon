@@ -15,6 +15,8 @@ variables:
   # Security analyzer configuration
   SECURE_LOG_LEVEL: "info"
   SECRET_DETECTION_HISTORIC_SCAN: "false"
+  # Grandfather commits at or before GitLab starter commit
+  ACCOUNTABILITY_BASELINE_SHA: "e9672c8"
 
 stages:
   - test
@@ -30,10 +32,14 @@ test:
   stage: test
   image: python:3.12-slim
   before_script:
+    - apt-get update -y && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
     - pip install --no-cache-dir -r src/requirements.txt
   script:
-    - python -m pytest -v
-
+    - python -m pytest -v --junitxml=report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
 # ------------------------------------------------------------------------------
 # Stage 2: Secure (Official GitLab Security Templates)
 # ------------------------------------------------------------------------------

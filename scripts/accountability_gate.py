@@ -21,7 +21,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 def is_all_zeros(val: Optional[str]) -> bool:
@@ -178,16 +178,61 @@ def get_commits_in_range(
         return [], 0, f"Exception executing git rev-list: {e}"
 
 
+def resolve_baseline_sha(
+    cli_baseline: Optional[str] = None,
+    repo_dir: str = ".",
+) -> Tuple[Optional[str], Optional[Set[str]]]:
+    """
+    Resolves baseline commit SHA from CLI argument or ACCOUNTABILITY_BASELINE_SHA env var.
+    Returns (resolved_full_sha, set_of_ancestor_and_self_shas).
+    Commits at or before this SHA are grandfathered (exempt from provenance trailer requirement).
+    """
+    raw_val = cli_baseline or os.environ.get("ACCOUNTABILITY_BASELINE_SHA")
+    if not raw_val or not raw_val.strip():
+        return None, None
+
+    raw_val = raw_val.strip()
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{raw_val}^{{commit}}"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode != 0:
+            return raw_val, None
+
+        full_baseline = res.stdout.strip()
+        rev_res = subprocess.run(
+            ["git", "rev-list", full_baseline],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if rev_res.returncode == 0:
+            ancestors = set(line.strip() for line in rev_res.stdout.splitlines() if line.strip())
+            return full_baseline, ancestors
+
+        return full_baseline, {full_baseline}
+    except Exception:
+        return raw_val, None
+
+
 def check_provenance(
     base: Optional[str],
     head: str,
     repo_dir: str = ".",
     no_merges: bool = True,
     check_only_head: bool = False,
+    baseline_sha: Optional[str] = None,
+    grandfathered_shas: Optional[Set[str]] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
     """
     Validates that all non-merge commits in range base..head (or head only) carry a valid Assisted-by trailer.
     Merge commits are excluded and reported.
+    Commits at or before baseline_sha are grandfathered as exempt.
     """
     violations: List[str] = []
 
@@ -201,9 +246,11 @@ def check_provenance(
             "base_sha": None,
             "head_sha": head,
             "check_only_head": False,
+            "baseline_sha": baseline_sha,
             "commits": [],
             "total_commits": 0,
             "valid_trailers_count": 0,
+            "grandfathered_commits_count": 0,
             "skipped_merges_count": 0,
         }, violations
 
@@ -217,9 +264,11 @@ def check_provenance(
             "base_sha": base,
             "head_sha": head,
             "check_only_head": check_only_head,
+            "baseline_sha": baseline_sha,
             "commits": [],
             "total_commits": 0,
             "valid_trailers_count": 0,
+            "grandfathered_commits_count": 0,
             "skipped_merges_count": skipped_merges,
         }, violations
 
@@ -231,9 +280,11 @@ def check_provenance(
                 "base_sha": base,
                 "head_sha": head,
                 "check_only_head": check_only_head,
+                "baseline_sha": baseline_sha,
                 "commits": [],
                 "total_commits": 0,
                 "valid_trailers_count": 0,
+                "grandfathered_commits_count": 0,
                 "skipped_merges_count": skipped_merges,
             }, violations
 
@@ -243,21 +294,43 @@ def check_provenance(
             "base_sha": base,
             "head_sha": head,
             "check_only_head": check_only_head,
+            "baseline_sha": baseline_sha,
             "commits": [],
             "total_commits": 0,
             "valid_trailers_count": 0,
+            "grandfathered_commits_count": 0,
             "skipped_merges_count": 0,
         }, violations
 
     inspected_commits = []
     valid_count = 0
+    grandfathered_count = 0
 
     for sha in shas:
         subject = get_commit_subject(sha, repo_dir)
         trailer_val = get_commit_trailer_git(sha, "Assisted-by", repo_dir)
 
         is_valid = bool(trailer_val and trailer_val.strip())
-        if is_valid:
+        is_grandfathered = False
+        if grandfathered_shas is not None:
+            is_grandfathered = sha in grandfathered_shas
+        elif baseline_sha:
+            try:
+                ancestor_res = subprocess.run(
+                    ["git", "merge-base", "--is-ancestor", sha, baseline_sha],
+                    cwd=repo_dir,
+                    capture_output=True,
+                    check=False,
+                )
+                is_grandfathered = ancestor_res.returncode == 0
+            except Exception:
+                is_grandfathered = False
+
+        if is_grandfathered:
+            grandfathered_count += 1
+
+        is_compliant = is_valid or is_grandfathered
+        if is_compliant:
             valid_count += 1
         else:
             violations.append(
@@ -265,12 +338,20 @@ def check_provenance(
                 "(expected e.g. 'Assisted-by: gitlab-duo' or 'Assisted-by: none')."
             )
 
+        status_label = "VALID"
+        if is_grandfathered and not is_valid:
+            status_label = "GRANDFATHERED"
+        elif not is_compliant:
+            status_label = "INVALID"
+
         inspected_commits.append({
             "sha": sha,
             "short_sha": sha[:8],
             "subject": subject,
             "assisted_by": trailer_val,
             "valid_trailer": is_valid,
+            "grandfathered": is_grandfathered,
+            "status": status_label,
         })
 
     status = "PASSED" if valid_count == len(shas) else "FAILED"
@@ -279,9 +360,11 @@ def check_provenance(
         "base_sha": base,
         "head_sha": head,
         "check_only_head": check_only_head,
+        "baseline_sha": baseline_sha,
         "commits": inspected_commits,
         "total_commits": len(shas),
         "valid_trailers_count": valid_count,
+        "grandfathered_commits_count": grandfathered_count,
         "skipped_merges_count": skipped_merges,
     }, violations
 
@@ -518,22 +601,26 @@ def run_gate(
     require_secret_report: bool = False,
     output_path: str = "gate_report.json",
     repo_dir: str = ".",
+    baseline_sha: Optional[str] = None,
 ) -> Tuple[int, Dict[str, Any]]:
     """Runs all gate checks and writes output report."""
     resolved_mode = resolve_mode(mode)
     resolved_base, base_source, check_only_head = resolve_base_ref(base, resolved_mode)
     resolved_head, head_source = resolve_head_ref(head)
     resolved_desc, desc_source = resolve_description(description)
+    resolved_baseline, grandfathered_set = resolve_baseline_sha(baseline_sha, repo_dir=repo_dir)
 
     all_violations: List[str] = []
 
-    # 1. Provenance Check (excludes merge commits)
+    # 1. Provenance Check (excludes merge commits, honors baseline grandfathering)
     prov_res, prov_violations = check_provenance(
         resolved_base,
         resolved_head,
         repo_dir=repo_dir,
         no_merges=True,
         check_only_head=check_only_head,
+        baseline_sha=resolved_baseline,
+        grandfathered_shas=grandfathered_set,
     )
     all_violations.extend(prov_violations)
 
@@ -555,6 +642,8 @@ def run_gate(
             "commits_inspected": prov_res.get("total_commits", 0),
             "skipped_merges": prov_res.get("skipped_merges_count", 0),
             "valid_trailers": prov_res.get("valid_trailers_count", 0),
+            "grandfathered_commits": prov_res.get("grandfathered_commits_count", 0),
+            "baseline_sha": resolved_baseline,
             "linked_issue": intent_res.get("linked_issue"),
             "intent_status": intent_res.get("status"),
             "secret_detection_status": secret_res.get("status"),
@@ -569,6 +658,7 @@ def run_gate(
             "head_ref": resolved_head,
             "head_source": head_source,
             "description_source": desc_source,
+            "baseline_sha": resolved_baseline,
         },
         "provenance_check": prov_res,
         "intent_check": intent_res,
@@ -601,12 +691,17 @@ def print_summary(report: Dict[str, Any]) -> None:
     print(f"1. Provenance Check: {prov.get('status', 'N/A')}")
     print(f"   - Commits Inspected: {summary.get('commits_inspected', 0)}")
     print(f"   - Valid Trailers:    {summary.get('valid_trailers', 0)}")
+    if summary.get("grandfathered_commits", 0) > 0:
+        base_label = str(summary.get("baseline_sha", ""))[:8]
+        print(f"   - Grandfathered:     {summary.get('grandfathered_commits')} (exempt by baseline {base_label})")
     if summary.get("skipped_merges", 0) > 0:
         print(f"   - Skipped Merges:    {summary.get('skipped_merges')} (excluded from check)")
 
     for c in prov.get("commits", []):
-        tag = "VALID" if c.get("valid_trailer") else "INVALID"
-        trailer = c.get("assisted_by") or "MISSING"
+        tag = c.get("status") or ("VALID" if c.get("valid_trailer") else "INVALID")
+        trailer = c.get("assisted_by")
+        if not trailer:
+            trailer = "NONE (GRANDFATHERED)" if c.get("grandfathered") else "MISSING"
         print(f"     [{c.get('short_sha')}] {c.get('subject')} (Trailer: {trailer}) -> {tag}")
 
     intent_status = intent.get("status", "N/A")
@@ -659,6 +754,11 @@ def main() -> None:
         help="Path for JSON report artifact output",
     )
     parser.add_argument("--repo-dir", default=".", help="Repository path (default: current directory)")
+    parser.add_argument(
+        "--baseline-sha",
+        default=None,
+        help="Optional commit SHA at or before which commits are grandfathered (exempt from provenance)",
+    )
 
     args = parser.parse_args()
 
@@ -671,6 +771,7 @@ def main() -> None:
         require_secret_report=args.require_secret_report,
         output_path=args.output,
         repo_dir=args.repo_dir,
+        baseline_sha=args.baseline_sha,
     )
 
     print_summary(report)
