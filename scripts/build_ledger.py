@@ -16,7 +16,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 def parse_trailer(msg: str, key: str = "Assisted-by") -> Optional[str]:
@@ -43,10 +43,58 @@ def parse_trailer(msg: str, key: str = "Assisted-by") -> Optional[str]:
     return val if (val is not None and len(val) > 0) else None
 
 
-def get_commit_history(repo_dir: str = ".", max_count: int = 50) -> List[Dict[str, Any]]:
-    """Retrieves commit history with provenance trailers from git log."""
-    # Format: SHA | Author Name | Author Email | Date (ISO) | Subject
-    fmt = "%H%x1f%an%x1f%ae%x1f%aI%x1f%s"
+def resolve_baseline_sha(
+    cli_baseline: Optional[str] = None,
+    repo_dir: str = ".",
+) -> Tuple[Optional[str], Optional[Set[str]]]:
+    """
+    Resolves baseline commit SHA from CLI argument or ACCOUNTABILITY_BASELINE_SHA env var.
+    Returns (resolved_full_sha, set_of_ancestor_and_self_shas).
+    Commits at or before this SHA are grandfathered (pre-contract).
+    """
+    raw_val = cli_baseline or os.environ.get("ACCOUNTABILITY_BASELINE_SHA")
+    if not raw_val or not raw_val.strip():
+        return None, None
+
+    raw_val = raw_val.strip()
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{raw_val}^{{commit}}"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode != 0:
+            return raw_val, None
+
+        full_baseline = res.stdout.strip()
+        rev_res = subprocess.run(
+            ["git", "rev-list", full_baseline],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if rev_res.returncode == 0:
+            ancestors = set(line.strip() for line in rev_res.stdout.splitlines() if line.strip())
+            return full_baseline, ancestors
+
+        return full_baseline, {full_baseline}
+    except Exception:
+        return raw_val, None
+
+
+def get_commit_history(
+    repo_dir: str = ".",
+    max_count: int = 50,
+    baseline_sha: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Retrieves commit history with provenance trailers and classification from git log."""
+    _, grandfathered_shas = resolve_baseline_sha(baseline_sha, repo_dir=repo_dir)
+
+    # Format: SHA | Author Name | Author Email | Date (ISO) | Subject | Parents (space-separated)
+    fmt = "%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%P"
     cmd = ["git", "log", f"--max-count={max_count}", f"--format={fmt}"]
 
     try:
@@ -66,6 +114,8 @@ def get_commit_history(repo_dir: str = ".", max_count: int = 50) -> List[Dict[st
         if len(parts) < 5:
             continue
         sha, author_name, author_email, date_iso, subject = parts[0], parts[1], parts[2], parts[3], parts[4]
+        parents_str = parts[5].strip() if len(parts) > 5 else ""
+        parent_list = [p for p in parents_str.split() if p]
 
         # Fetch full commit message to inspect trailers reliably
         msg_res = subprocess.run(
@@ -78,18 +128,34 @@ def get_commit_history(repo_dir: str = ".", max_count: int = 50) -> List[Dict[st
         full_msg = msg_res.stdout if msg_res.returncode == 0 else subject
         trailer = parse_trailer(full_msg, "Assisted-by")
 
+        # Check merge commit & grandfathered status
+        is_merge = len(parent_list) > 1
+        is_grandfathered = bool(grandfathered_shas and sha in grandfathered_shas)
+
         # Determine provenance classification
-        is_verified = trailer is not None and len(trailer.strip()) > 0
-        if is_verified:
-            if trailer.lower() == "none":
-                category = "Human Only"
-                badge_class = "badge-human"
-            else:
-                category = f"AI-Assisted ({trailer})"
-                badge_class = "badge-ai"
+        if is_merge:
+            category = "Merge (excluded)"
+            badge_class = "badge-neutral"
+            in_scope = False
+            is_verified = False
+        elif is_grandfathered:
+            category = "Grandfathered (pre-contract)"
+            badge_class = "badge-neutral"
+            in_scope = False
+            is_verified = False
         else:
-            category = "Missing Provenance"
-            badge_class = "badge-unverified"
+            in_scope = True
+            is_verified = trailer is not None and len(trailer.strip()) > 0
+            if is_verified:
+                if trailer.lower() == "none":
+                    category = "Human Only"
+                    badge_class = "badge-human"
+                else:
+                    category = f"AI-Assisted ({trailer})"
+                    badge_class = "badge-ai"
+            else:
+                category = "Missing Provenance"
+                badge_class = "badge-unverified"
 
         commits.append({
             "sha": sha,
@@ -102,6 +168,9 @@ def get_commit_history(repo_dir: str = ".", max_count: int = 50) -> List[Dict[st
             "category": category,
             "badge_class": badge_class,
             "is_verified": is_verified,
+            "is_merge": is_merge,
+            "is_grandfathered": is_grandfathered,
+            "in_scope": in_scope,
         })
 
     return commits
@@ -140,10 +209,22 @@ def generate_html(
 
     # Metrics calculation
     total_commits = len(commits)
-    verified_count = sum(1 for c in commits if c["is_verified"])
-    ai_assisted_count = sum(1 for c in commits if c["is_verified"] and c["trailer"].lower() != "none")
-    human_only_count = sum(1 for c in commits if c["is_verified"] and c["trailer"].lower() == "none")
-    compliance_rate = (verified_count / total_commits * 100) if total_commits > 0 else 0.0
+    merge_count = sum(1 for c in commits if c.get("is_merge"))
+    grandfathered_count = sum(1 for c in commits if c.get("is_grandfathered"))
+
+    in_scope_commits = [c for c in commits if not c.get("is_merge") and not c.get("is_grandfathered")]
+    in_scope_count = len(in_scope_commits)
+
+    verified_count = sum(1 for c in in_scope_commits if c.get("is_verified"))
+    ai_assisted_count = sum(1 for c in in_scope_commits if c.get("is_verified") and c.get("trailer") and c["trailer"].lower() != "none")
+    human_only_count = sum(1 for c in in_scope_commits if c.get("is_verified") and c.get("trailer") and c["trailer"].lower() == "none")
+
+    if total_commits == 0:
+        compliance_rate = 0.0
+    elif in_scope_count == 0:
+        compliance_rate = 100.0
+    else:
+        compliance_rate = (verified_count / in_scope_count * 100.0)
 
     # Gate info
     gate_status = "NOT AVAILABLE"
@@ -191,6 +272,13 @@ def generate_html(
     # Build rows
     rows_html = []
     for c in commits:
+        if c.get("is_merge"):
+            trailer_display = f"Assisted-by: {c['trailer']}" if c.get("trailer") else "N/A (Merge commit)"
+        elif c.get("is_grandfathered"):
+            trailer_display = f"Assisted-by: {c['trailer']}" if c.get("trailer") else "N/A (Pre-contract baseline)"
+        else:
+            trailer_display = f"Assisted-by: {c.get('trailer') or 'MISSING'}"
+
         rows_html.append(f"""
         <tr>
           <td class="font-mono">
@@ -203,7 +291,7 @@ def generate_html(
             <span class="badge {c['badge_class']}">{html.escape(c['category'])}</span>
           </td>
           <td>
-            <code class="trailer-code">{html.escape('Assisted-by: ' + (c['trailer'] or 'MISSING'))}</code>
+            <code class="trailer-code">{html.escape(trailer_display)}</code>
           </td>
         </tr>
         """)
@@ -447,7 +535,7 @@ def generate_html(
       <div class="stat-card">
         <div class="stat-label">Provenance Compliance</div>
         <div class="stat-value">{compliance_rate:.1f}%</div>
-        <div class="stat-sub">{verified_count} of {total_commits} commits compliant</div>
+        <div class="stat-sub">{verified_count} of {in_scope_count} evaluated commits compliant</div>
       </div>
 
       <div class="stat-card">
@@ -461,18 +549,30 @@ def generate_html(
         <div class="stat-value" style="color: var(--accent);">{human_only_count}</div>
         <div class="stat-sub">Assisted-by: none</div>
       </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Grandfathered Commits</div>
+        <div class="stat-value" style="color: var(--text-muted);">{grandfathered_count}</div>
+        <div class="stat-sub">Grandfathered (pre-contract)</div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-label">Merge Commits</div>
+        <div class="stat-value" style="color: var(--text-muted);">{merge_count}</div>
+        <div class="stat-sub">Merge (excluded)</div>
+      </div>
     </div>
 
     {violations_html}
 
     <div class="disclaimer-card">
-      <strong>Honest Limitation &amp; Governance Contract:</strong> AI origin cannot be reliably detected retrospectively in legacy commits without metadata. This pipeline establishes an immutable provenance contract going forward: every change must carry an <code>Assisted-by:</code> trailer and explicit issue intent linkage (<code>Closes #&lt;id&gt;</code>) enforced at the merge gate.
+      <strong>Honest Limitation &amp; Governance Contract:</strong> AI origin cannot be reliably detected retrospectively in legacy commits without metadata. This pipeline establishes an enforced provenance contract going forward: every change must carry an <code>Assisted-by:</code> trailer and explicit issue intent linkage (<code>Closes #&lt;id&gt;</code>) enforced at the merge gate.
     </div>
 
     <div class="card">
       <div class="card-header">
         <h2>Continuous Provenance Ledger</h2>
-        <span class="stat-sub">{total_commits} commits indexed from git repository log</span>
+        <span class="stat-sub">{total_commits} commits indexed ({in_scope_count} evaluated &bull; {grandfathered_count} grandfathered &bull; {merge_count} excluded)</span>
       </div>
       <div style="overflow-x: auto;">
         <table>
@@ -509,12 +609,13 @@ def build_ledger(
     repo_dir: str = ".",
     project_title: str = "AI Accountability Ledger",
     environment: str = "staging",
+    baseline_sha: Optional[str] = None,
 ) -> Path:
     """Builds the static Accountability Ledger page into output_dir/index.html."""
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    commits = get_commit_history(repo_dir=repo_dir)
+    commits = get_commit_history(repo_dir=repo_dir, baseline_sha=baseline_sha)
     gate_report = load_gate_report(gate_report_path)
 
     html_page = generate_html(
@@ -540,6 +641,11 @@ def main() -> None:
     )
     parser.add_argument("--repo-dir", default=".", help="Repository directory (default: current directory)")
     parser.add_argument(
+        "--baseline-sha",
+        default=None,
+        help="Commit SHA at or before which commits are grandfathered (defaults to ACCOUNTABILITY_BASELINE_SHA env var)",
+    )
+    parser.add_argument(
         "--title",
         default="AI Accountability Ledger",
         help="Page title for the dashboard",
@@ -557,6 +663,7 @@ def main() -> None:
         repo_dir=args.repo_dir,
         project_title=args.title,
         environment=args.environment,
+        baseline_sha=args.baseline_sha,
     )
 
 

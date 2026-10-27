@@ -1,9 +1,9 @@
-# Devpost Submission: <PROJECT_NAME>
+# Devpost Submission: DuoGate
 
 **Event**: GitLab Transcend Hackathon — "Life After Code"  
 **Track**: Path A (Fresh Project) & Supervised Autonomy  
-**Repository**: [<GITLAB_PROJECT_URL>](<GITLAB_PROJECT_URL>)  
-**Accountability Ledger**: [<PAGES_URL>](<PAGES_URL>)
+**Repository**: [https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/43738285/showcase](https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/43738285/showcase)  
+**Accountability Ledger**: [https://showcase-6f05ac.gitlab.io](https://showcase-6f05ac.gitlab.io)
 
 ---
 
@@ -16,13 +16,13 @@ Most organizations today cannot answer simple questions about changes deployed t
 - *What specific requirement was it authorized to fulfill?*
 - *When an outage occurs at 2:00 AM, how do we trace the failure back to the responsible commit, developer intent, and MR?*
 
-We built **`<PROJECT_NAME>`** to prove that **"Life After Code"** must be about **governance, provenance, and rapid incident triage**. By combining automated CI pipeline gates with the GitLab Duo Agent Platform, we turn unvetted AI code generation into a transparent, verifiable DevSecOps lifecycle.
+We built **`DuoGate`** to prove that **"Life After Code"** must be about **governance, provenance, and rapid incident triage**. By combining automated CI pipeline gates with the GitLab Duo Agent Platform, we turn unvetted AI code generation into a transparent, verifiable DevSecOps lifecycle.
 
 ---
 
 ## 🛠️ What It Does
 
-`<PROJECT_NAME>` is an end-to-end DevSecOps system composed of an automated CI accountability gate, a continuous static Accountability Ledger hosted on GitLab Pages, and three custom GitLab Duo flows that supervise changes from issue definition to post-incident remediation:
+`DuoGate` is an end-to-end DevSecOps system composed of an automated CI accountability gate, a continuous static Accountability Ledger hosted on GitLab Pages, and three custom GitLab Duo flows that supervise changes from issue definition to post-incident remediation:
 
 1. **Mandatory Provenance Contracts**:
    - Every commit must include an RFC-compliant Git trailer: `Assisted-by: <tool|agent>` or `Assisted-by: none`.
@@ -31,12 +31,13 @@ We built **`<PROJECT_NAME>`** to prove that **"Life After Code"** must be about 
    - Inspects exclusively commits introduced by the MR (`base..head`), explicitly excluding merge commits.
    - Enforces valid `Assisted-by:` trailers and issue intent linkage.
    - Ingests GitLab Secret Detection reports (`gl-secret-detection-report.json`) and halts merges on exposed credentials.
-   - Supports a default-branch push mode that evaluates `CI_COMMIT_BEFORE_SHA..CI_COMMIT_SHA` (or `HEAD` if initial push).
+   - Supports a default-branch push mode that evaluates `CI_COMMIT_BEFORE_SHA..CI_COMMIT_SHA` (or `HEAD` if initial push). Commits at or before `ACCOUNTABILITY_BASELINE_SHA` (`e9672c8`) are grandfathered as pre-contract baseline.
    - Generates a structured `gate_report.json` artifact and fails non-compliant builds.
 3. **Continuous Accountability Ledger on GitLab Pages (`scripts/build_ledger.py`)**:
    - Reconstructs the complete provenance audit trail directly from Git commit history.
    - Calculates provenance compliance rates, AI vs. human commit ratios, and active gate status.
-   - Published statically to GitLab Pages (`staging` environment) with zero external database dependencies.
+   - Classifies merge commits as "Merge (excluded)" and baseline starter commits as "Grandfathered (pre-contract)", computing compliance over evaluated commits.
+   - Published statically to GitLab Pages (`staging` environment) with zero external database dependencies, accessible at [https://showcase-6f05ac.gitlab.io](https://showcase-6f05ac.gitlab.io).
 4. **Three GitLab Duo Custom Flows**:
    - **Flow 1 ("Intent Definition")**: Triggered on mention on an issue (`@<intent-flow-handle>`). Generates acceptance criteria, task checklists, and an explicit **Out-of-Scope** guardrail list to prevent AI scope creep before coding starts.
    - **Flow 2 ("Accountability Card")**: Triggered on mention on an MR review (`@<card-flow-handle>`). Evaluates diffs, trailers, intent match, and scope creep. Emits an advisory review card rating risk as LOW/MEDIUM/HIGH with an explicit recommendation (APPROVE/REJECT).
@@ -46,7 +47,7 @@ We built **`<PROJECT_NAME>`** to prove that **"Life After Code"** must be about 
 
 ## 🤖 How We Built It & Used the GitLab Duo Agent Platform
 
-We designed `<PROJECT_NAME>` from the ground up to utilize the official **GitLab Duo Agent Platform Flow Registry v1 specification**:
+We designed `DuoGate` from the ground up to utilize the official **GitLab Duo Agent Platform Flow Registry v1 specification**:
 
 - **Strict Ambient Schema Compliance**:
   - Our custom flows (`flows/intent.yml`, `flows/accountability-card.yml`, `flows/incident-trace.yml`, `flows/tracer-bullet.yml`) strictly follow the Flow Registry v1 schema: `version: "v1"`, `environment: ambient`, top-level `components`, `prompts`, `routers`, and `flow: { entry_point: ... }`.
@@ -64,7 +65,7 @@ We designed `<PROJECT_NAME>` from the ground up to utilize the official **GitLab
 
 ## 🔄 DevSecOps Lifecycle Stages Covered
 
-`<PROJECT_NAME>` covers 7 of GitLab's 9 lifecycle stages (plan, create, verify, secure, release, monitor, govern) plus incident remediation:
+`DuoGate` covers 7 of GitLab's 9 lifecycle stages (plan, create, verify, secure, release, monitor, govern) plus incident remediation:
 
 ```
 [PLAN]       Flow 1 (Intent Definition) establishes acceptance criteria & out-of-scope boundaries
@@ -92,18 +93,20 @@ We designed `<PROJECT_NAME>` from the ground up to utilize the official **GitLab
 2. **Git Clone Depth in GitLab CI**: GitLab CI defaults to shallow clones (`GIT_DEPTH: 20` or `50`), which breaks `git rev-list base..head` if the branch diverged further back. Setting `GIT_DEPTH: "0"` in `.gitlab-ci.yml` ensured reliable provenance inspection across all MRs.
 3. **Preventing False Passes in Governance**: It was critical that missing or malformed security reports or gate artifacts never showed a false pass. We implemented fail-closed logic across both `accountability_gate.py` and `build_ledger.py`.
 4. **Honest Stated Limitation**: AI generation origin cannot be reliably detected retrospectively in legacy Git commits. We solved this by clearly documenting this constraint and establishing an enforceable, forward-looking provenance contract.
+5. **Incident Issue Triggering**: Incident issues are opened by a human from the telemetry template (`.gitlab/issue_templates/incident.md`) upon observing staging healthcheck failures, ensuring human supervision over remediation workflows.
 
 ---
 
 ## 🏆 Accomplishments That We're Proud Of
 
-- **49 Automated Tests with 100% Determinism**: Complete coverage across unit endpoints, Git trailer extraction, MR intent parsing, push mode all-zeros base handling, and XSS escaping.
+- **56 Automated Tests with 100% Determinism**: Complete coverage across unit endpoints, Git trailer extraction, MR intent parsing, push mode all-zeros base handling, baseline grandfathering, merge commit exclusion, and XSS escaping.
+- **Green GitLab Pipeline Verified**: End-to-end 5-stage pipeline on `main` passing tests (with JUnit reporting), SAST, secret detection, accountability gate, Pages deployment, and staging smoke test.
 - **Completely Self-Contained Architecture**: Zero external databases, zero third-party SaaS services, and zero external hosting. Everything runs in GitLab CI, GitLab Pages, and the Duo Agent Platform.
 - **3 Deterministic Demo Scenarios**: Automated with `./scripts/seed_demo.sh` to demonstrate clean passage (Scenario A), automated gate & secret rejection with fake key `AKIAZ7QX3PLM9RTK2VNB` (Scenario B), and post-deployment incident root-cause triage (Scenario C). Demo branches are pushed to GitLab only.
 
 ---
 
-## 🔮 What's Next for <PROJECT_NAME>
+## 🔮 What's Next for DuoGate
 
 1. **Cryptographic Agent Attestation**: Integrating Sigstore / Cosign to cryptographically sign commits with Duo Agent identities alongside metadata `Assisted-by:` trailers.
 2. **Automated Pipeline Event Triggers**: Upgrading Flow 3 from comment mention to native `pipeline_failed` event triggers once the feature flag is generally available.

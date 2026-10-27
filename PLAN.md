@@ -1,4 +1,4 @@
-# Implementation Plan: <PROJECT_NAME> (AI Accountability Pipeline)
+# Implementation Plan: DuoGate (AI Accountability Pipeline)
 
 **Hackathon**: GitLab Transcend Hackathon — "Life After Code" (Devpost)  
 **Theme**: Post-Code Generation DevSecOps Lifecycle Automation via GitLab Duo Agent Platform  
@@ -35,7 +35,7 @@
 ## 3. Final Repository File Tree
 
 ```
-<PROJECT_NAME>/
+DuoGate/
 ├── .gitlab-ci.yml                 # Stages: test -> security -> gate -> deploy -> healthcheck
 ├── LICENSE                        # MIT License
 ├── README.md                      # Architecture, setup steps, lifecycle mapping, limitations
@@ -302,7 +302,7 @@ Files to create:
 ## 9. Manual Steps to Execute in GitLab Web UI
 
 1. **Create Project**:
-   * Create a new **Public** project named `<PROJECT_NAME>`.
+   * Create a new **Public** project named `DuoGate`.
    * Verify GitLab Duo Enterprise / Ultimate features are active on the namespace.
 2. **Configure Merge Settings**:
    * Navigate to **Settings > Merge requests**.
@@ -318,7 +318,7 @@ Files to create:
    * Register Flow 2: Paste `flows/accountability-card.yml`, enable `mention` trigger.
    * Register Flow 3: Paste `flows/incident-trace.yml`, enable `mention` trigger.
 5. **Push Codebase**:
-   * Set remote: `git remote add gitlab <GITLAB_PROJECT_URL>`.
+   * Set remote: `git remote add gitlab https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/43738285/showcase`.
    * Push initial branch to GitLab: `git push -u gitlab main`.
 6. **Verify Initial Pipeline & Tracer**:
    * Confirm the pipeline on `main` passes and deploys the initial Accountability Ledger.

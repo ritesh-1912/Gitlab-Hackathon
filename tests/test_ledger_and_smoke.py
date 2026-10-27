@@ -209,6 +209,81 @@ def test_build_ledger_cli(tmp_path: Path):
     assert (out_dir / "index.html").exists()
 
 
+def test_build_ledger_excludes_merge_commits(tmp_path: Path):
+    init_test_git_repo(tmp_path)
+    create_test_commit(tmp_path, "feat: base commit\n\nAssisted-by: none", "base.txt")
+
+    # Create a feature branch and commit
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=str(tmp_path), check=True, capture_output=True)
+    create_test_commit(tmp_path, "feat: branch commit\n\nAssisted-by: gitlab-duo", "feat.txt")
+
+    # Back to main, create another commit to make a real merge
+    subprocess.run(["git", "checkout", "main"], cwd=str(tmp_path), check=True, capture_output=True)
+    create_test_commit(tmp_path, "feat: main commit\n\nAssisted-by: none", "main.txt")
+
+    # Merge feature branch with --no-ff
+    subprocess.run(["git", "merge", "--no-ff", "-m", "Merge branch feature", "feature"], cwd=str(tmp_path), check=True, capture_output=True)
+
+    out_dir = tmp_path / "public"
+    index_file = build_ledger(
+        output_dir=str(out_dir),
+        repo_dir=str(tmp_path),
+    )
+    content = index_file.read_text(encoding="utf-8")
+    assert "Merge (excluded)" in content
+    assert "Merge Commits" in content
+    assert "1 excluded" in content
+    # 3 evaluated commits, all 3 compliant -> 100.0% compliance
+    assert "100.0%" in content
+    assert "3 of 3 evaluated commits compliant" in content
+
+
+def test_build_ledger_grandfathers_baseline_commits(tmp_path: Path):
+    init_test_git_repo(tmp_path)
+    # Starter commit lacks trailer
+    create_test_commit(tmp_path, "Initial starter commit", "starter.txt")
+    res = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True)
+    starter_sha = res.stdout.strip()
+
+    # Subsequent commit has trailer
+    create_test_commit(tmp_path, "feat: compliant commit\n\nAssisted-by: gitlab-duo", "new.txt")
+
+    out_dir = tmp_path / "public"
+    index_file = build_ledger(
+        output_dir=str(out_dir),
+        repo_dir=str(tmp_path),
+        baseline_sha=starter_sha,
+    )
+    content = index_file.read_text(encoding="utf-8")
+    assert "Grandfathered (pre-contract)" in content
+    assert "Grandfathered Commits" in content
+    assert "1 grandfathered" in content
+    # Evaluated is 1 commit, which is compliant -> 100.0%
+    assert "100.0%" in content
+    assert "1 of 1 evaluated commits compliant" in content
+    assert "enforced provenance contract" in content
+    assert "immutable provenance contract" not in content
+
+
+def test_build_ledger_baseline_via_environment_variable(tmp_path: Path, monkeypatch):
+    init_test_git_repo(tmp_path)
+    create_test_commit(tmp_path, "Legacy unassisted root", "legacy.txt")
+    res = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True, text=True)
+    root_sha = res.stdout.strip()
+
+    create_test_commit(tmp_path, "feat: assisted commit\n\nAssisted-by: Antigravity", "app.py")
+
+    monkeypatch.setenv("ACCOUNTABILITY_BASELINE_SHA", root_sha)
+    out_dir = tmp_path / "public"
+    index_file = build_ledger(
+        output_dir=str(out_dir),
+        repo_dir=str(tmp_path),
+    )
+    content = index_file.read_text(encoding="utf-8")
+    assert "Grandfathered (pre-contract)" in content
+    assert "100.0%" in content
+
+
 # ---------------------------------------------------------------------------
 # Smoke Test Runner Tests
 # ---------------------------------------------------------------------------

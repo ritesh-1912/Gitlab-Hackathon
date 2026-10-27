@@ -1,11 +1,11 @@
-# Demo Runbook: <PROJECT_NAME>
+# Demo Runbook: DuoGate
 
-This document provides a step-by-step runbook for demonstrating the three automated DevSecOps scenarios in `<PROJECT_NAME>`.
+This document provides a step-by-step runbook for demonstrating the three automated DevSecOps scenarios in `DuoGate`.
 
 > [!NOTE]
 > All demo branches are pushed to GitLab only. Ensure your local repository has the `gitlab` remote configured pointing to your GitLab project:
 > ```bash
-> git remote add gitlab <GITLAB_PROJECT_URL>
+> git remote add gitlab https://gitlab.com/gitlab-ai-hackathon/transcend-october-2026/43738285/showcase
 > ```
 
 ---
@@ -27,14 +27,14 @@ This document provides a step-by-step runbook for demonstrating the three automa
    - `flows/incident-trace.yml` (mention trigger: note handle `@<incident-flow-handle>`)
 
 3. **Verify Staging Pages Configuration**:
-   In **Deploy > Pages**, ensure Pages access is set to **Everyone** so the static Accountability Ledger can be viewed at `<PAGES_URL>`.
+   In **Deploy > Pages**, ensure Pages access is set to **Everyone** so the static Accountability Ledger can be viewed at `https://showcase-6f05ac.gitlab.io`.
 
 ---
 
 ## Scenario A: Clean Feature MR (Passes & Deploys)
 
 ### 1. Plan Stage: Define Intent
-1. In GitLab, create Issue #<YOUR ISSUE NUMBER> titled `Add Inventory Summary Endpoint`.
+1. In GitLab, create Issue #2 titled `Add Inventory Summary Endpoint`.
 2. Post a comment mentioning `@<intent-flow-handle>`:
    ```text
    @<intent-flow-handle> please define the acceptance criteria and scope boundaries.
@@ -46,25 +46,25 @@ This document provides a step-by-step runbook for demonstrating the three automa
    ```bash
    git push -u gitlab demo/scenario-a-clean
    ```
-2. Open a Merge Request on GitLab:
+2. Open a Merge Request on GitLab with these exact details:
    - **Title**: `feat: add inventory summary endpoint`
-   - **Description**: `Implements aggregated inventory summary calculation. Closes #<YOUR ISSUE NUMBER>`
+   - **Description**: `Implements aggregated inventory summary calculation. Closes #2`
 3. Observe the pipeline: `test`, `security` (Secret Detection), and `gate` (`accountability-gate`) run.
 
 ### 3. Review Stage: Accountability Card
 1. In the MR comments, mention `@<card-flow-handle>`:
    ```text
-   @<card-flow-handle> please review this MR against issue #<YOUR ISSUE NUMBER>.
+   @<card-flow-handle> please review this MR against issue #2.
    ```
-2. The agent evaluates the provenance trailer (`Assisted-by: gitlab-duo`), intent linkage (`Closes #<YOUR ISSUE NUMBER>`), and diff.
+2. The agent evaluates the provenance trailer (`Assisted-by: gitlab-duo`), intent linkage (`Closes #2`), and diff.
 
 ### 4. Expected result (to be confirmed after the first run)
 - `test` and `gate` jobs pass.
 - Accountability Card rates risk as **LOW**, finds zero scope creep, and recommends **APPROVE**.
 - Merge the MR into `main`.
-- The `deploy` stage builds the static ledger via `scripts/build_ledger.py` and publishes to GitLab Pages (`<PAGES_URL>`).
+- The `deploy` stage builds the static ledger via `scripts/build_ledger.py` and publishes to GitLab Pages (`https://showcase-6f05ac.gitlab.io`).
 - The `healthcheck` smoke test verifies the endpoint in-process and passes.
-- Staging environment displays a compliant provenance entry in `public/index.html` (accessible at `<PAGES_URL>`).
+- Staging environment displays a compliant provenance entry in `public/index.html` (accessible at `https://showcase-6f05ac.gitlab.io`).
 
 ---
 
@@ -77,7 +77,7 @@ This document provides a step-by-step runbook for demonstrating the three automa
    ```
    > [!NOTE]
    > This branch contains a missing `Assisted-by:` trailer, an unrelated file (`src/unrelated_admin_tool.py`), and a dummy test key (`AKIAZ7QX3PLM9RTK2VNB`, commented as FAKE strictly for Secret Detection demonstration). This key exists only on this branch and is never merged.
-2. Open a Merge Request on GitLab:
+2. Open a Merge Request on GitLab with these exact details:
    - **Title**: `wip: add admin tool`
    - **Description**: `Adds admin tool without linked issue.`
 
@@ -103,7 +103,10 @@ This document provides a step-by-step runbook for demonstrating the three automa
    ```bash
    git push -u gitlab demo/scenario-c-bad-healthcheck
    ```
-2. Merge the branch into `main` (simulating an approved release that carries a runtime defect).
+2. Open a Merge Request on GitLab with these exact details:
+   - **Title**: `fix(db): adjust connection pooling timeout`
+   - **Description**: `Adjusts connection pooling timeout to 0ms.`
+3. Merge the branch into `main` (simulating an approved release that carries a runtime defect).
 
 ### 2. Observe Smoke Test Failure
 1. The pipeline on `main` runs: `test` passes, `deploy` publishes the ledger, but `staging-healthcheck` fails:
@@ -115,7 +118,7 @@ This document provides a step-by-step runbook for demonstrating the three automa
    - **Pipeline URL**: URL of the failed pipeline on `main`
    - **Culprit Commit SHA**: SHA of the bad commit from `demo/scenario-c-bad-healthcheck`
    - **MR Number**: Merge request number
-   - **Linked Issue Number**: Linked issue number
+   - **Linked Issue Number**: Linked issue number (e.g. 2)
 
 ### 4. Trigger Incident Trace Flow
 1. In the incident issue comments, mention `@<incident-flow-handle>`:
@@ -126,7 +129,7 @@ This document provides a step-by-step runbook for demonstrating the three automa
 ### 5. Expected result (to be confirmed after the first run)
 - Flow 3 traces using the incident issue's fields (culprit SHA, MR, linked issue) and available tools.
 - The flow posts an incident summary detailing the breaking change, its provenance trailer, and outputs the exact git command:
-  ```bash
-  git revert <culprit_sha> --no-edit && git push gitlab main
-  ```
+   ```bash
+   git revert <culprit_sha> --no-edit && git push gitlab main
+   ```
 - Run the command to restore staging health and verify the subsequent pipeline passes.
