@@ -1,5 +1,5 @@
 # ==============================================================================
-# GitLab CI/CD Pipeline: AI Accountability Pipeline (<PROJECT_NAME>)
+# GitLab CI/CD Pipeline: AI Accountability Pipeline (DuoGate)
 # DevSecOps Lifecycle Stages: test -> security -> gate -> deploy -> healthcheck
 # ==============================================================================
 
