@@ -74,3 +74,10 @@ def test_ledger_endpoint(tmp_path):
         response = test_client.get("/ledger")
         assert response.status_code == 200
         assert b"Accountability Ledger" in response.data
+
+def test_inventory_summary_endpoint(client):
+    response = client.get("/inventory/summary")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["total_items"] >= 2
+    assert data["total_quantity"] > 0

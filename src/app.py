@@ -64,6 +64,12 @@ def create_app(test_config=None):
             return jsonify({"error": "Accountability Ledger not generated yet"}), 404
         return send_from_directory(public_dir, "index.html")
 
+
+    @app.route("/inventory/summary", methods=["GET"])
+    def inventory_summary():
+        total_qty = sum(item["quantity"] for item in items)
+        return jsonify({"total_items": len(items), "total_quantity": total_qty}), 200
+
     return app
 
 
